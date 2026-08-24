@@ -1,0 +1,11 @@
+# Four dependencies for ~66,000 lines.  Everything else is the standard
+# library: sqlite3 for storage, http.server for the web app, urllib and
+# concurrent.futures for the crawlers, csv for the corpus.
+#
+# Floors are the oldest releases whose APIs this code actually uses
+# (openpyxl.cell.WriteOnlyCell, formatting.rule.FormulaRule,
+# cell.ILLEGAL_CHARACTERS_RE; numpy matmul on int16).  Newer majors are fine.
+requests>=2.28
+openpyxl>=3.1
+numpy>=1.24
+defusedxml>=0.7

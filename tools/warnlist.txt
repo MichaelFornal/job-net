@@ -1,0 +1,12 @@
+# Patterns that are probably fine but a human must eyeball once.
+# Same format as denylist.txt.  These print a warning; they do NOT fail the run.
+#
+# The audit found 104 docstring lines across 12 modules written about a specific
+# operator ("he", "his band", "his resume").  Most are attached to real measured
+# numbers, so the fix is rewording to "the operator" -- not deletion.
+\b(he|his|him)\b
+\bmichael\b
+\bthe user\b
+# Word-bounded: bare `his band` also matches the substring inside
+# "this band", which is ordinary English and not a finding.
+\bhis band\b

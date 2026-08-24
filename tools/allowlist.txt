@@ -1,0 +1,18 @@
+# Exceptions: a matched line is exempt if it ALSO matches one of these.
+# Keep this short and specific -- every entry is a hole in the denylist, and an
+# over-broad one silently disarms the gate.
+
+# The Bundesagentur für Arbeit's job-search API ships a fixed, documented,
+# public API key -- it is in their published examples and identifies the client,
+# not an account.  It matches the generic api_key= pattern and is not a secret.
+API_KEY = "jobboerse-jobsuche"
+
+# A placeholder affiliate id, not a real one.
+"ffffffffffffffffffff"
+
+# The repo's own identity.  The account handle contains the operator's surname,
+# which the local denylist denies -- that denial is right for prose and wrong
+# for the URL this repo lives at.  Exempt the specific forms, not the name.
+github\.com/FornalPortfolio
+FornalPortfolio
+320591349\+FornalPortfolio@users\.noreply\.github\.com

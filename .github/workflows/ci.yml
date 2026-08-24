@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the floor the code is written to -- no match statements, no
+        # PEP 604 unions at runtime.  3.12 guards against the floor rotting.
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # scan_secrets.sh reads the whole history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - run: pip install -r requirements.txt
+
+      # First, and on its own: nothing personal in the tree or the history.
+      - name: secrets + PII scan
+        run: ./tools/scan_secrets.sh
+
+      # Every one of these builds its own synthetic data in a temp directory.
+      # None needs the corpus, a network, or an API key.
+      - name: triage selftest
+        run: python3 triage/selftest.py
+      - name: scout selftest
+        run: python3 triage/scout_selftest.py
+      - name: feature schema selftest
+        run: python3 score_features.py --selftest
+      - name: scoring agrees with its SQL definition
+        run: python3 score_profile.py --verify
+      - name: swath vocabulary selftest
+        run: python3 swath_vocab.py --selftest
+      - name: everything compiles
+        run: python3 -m compileall -q .
