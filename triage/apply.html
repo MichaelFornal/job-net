@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Apply</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#f5f6f8;--card:#fff;--line:#e4e8ed;--ink:#14161a;--mut:#606a78;
+      --accent:#1c3f94;--ok:#12683a;--okbg:#e5f6ea;--warn:#7a5200;--warnbg:#fdf0d5;
+      --bad:#8b1a1a;--badbg:#fde8e8;--infobg:#e8eefc;--shadow:0 1px 3px rgba(0,0,0,.07)}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--line:#262c35;
+      --ink:#e8ebef;--mut:#9aa5b4;--accent:#6f97ff;--ok:#5ed69a;--okbg:#12301f;
+      --warn:#e3b95e;--warnbg:#332811;--bad:#ff8f8f;--badbg:#3a1717;--infobg:#18233d;
+      --shadow:0 1px 3px rgba(0,0,0,.4)}}
+body{font:14px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+     background:var(--bg);color:var(--ink);overflow:hidden}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:9px 18px;
+       display:flex;align-items:center;gap:14px;height:46px}
+h1{font-size:14px;letter-spacing:-.2px;font-weight:700}
+h1 a{color:var(--mut);font-weight:600;text-decoration:none;margin-left:9px;
+     font-size:12.5px}
+h1 a:hover{color:var(--accent)}
+#stats{font-size:12px;color:var(--mut);font-variant-numeric:tabular-nums}
+#tabs{display:flex;gap:3px;margin-left:auto;flex-wrap:wrap}
+#tabs button{background:none;border:1px solid transparent;color:var(--mut);
+     padding:4px 10px;border-radius:7px;cursor:pointer;font:inherit;font-size:12.5px;
+     font-weight:600;white-space:nowrap}
+#tabs button.on{background:var(--infobg);color:var(--accent)}
+#tabs button:hover{color:var(--ink)}
+#tabs b{font-weight:700;margin-left:5px;font-variant-numeric:tabular-nums}
+#tabs kbd{opacity:.5;margin-right:5px;font-size:10px}
+#bar{height:3px;background:var(--line)}
+#bar div{height:100%;background:var(--ok);transition:width .25s}
+main{height:calc(100vh - 49px);display:flex;flex-direction:column;align-items:center}
+#facets{width:min(1000px,100%);padding:10px 16px 0;display:flex;gap:12px;
+      align-items:center;flex-wrap:wrap}
+#chips{display:flex;gap:15px;flex-wrap:wrap;align-items:center}
+.fg{display:flex;align-items:center}
+.fg .fl{font-size:10.5px;font-weight:700;color:var(--mut);letter-spacing:.5px;
+      text-transform:uppercase;margin-right:7px}
+.fg button{font:inherit;font-size:12px;font-weight:600;padding:4px 9px;
+      border:1px solid var(--line);background:var(--card);color:var(--mut);
+      cursor:pointer;margin-left:-1px;position:relative}
+.fg button:first-of-type{border-radius:7px 0 0 7px;margin-left:0}
+.fg button:last-child{border-radius:0 7px 7px 0}
+.fg button:hover{color:var(--ink)}
+.fg button.on{background:var(--infobg);border-color:var(--accent);
+      color:var(--accent);z-index:1}
+/* A chip that would empty the list still clicks: dimming says "nothing there"
+   without making the bar a corner you can only get out of via clear. */
+.fg button.zero{opacity:.45}
+.fg b{font-weight:700;margin-left:5px;opacity:.6;
+      font-variant-numeric:tabular-nums}
+/* Grows to fill a row it has to itself, but capped: the chips are the filter
+   most of the time and a full-width box beside them reads as the main event. */
+#facets input{flex:1;min-width:150px;max-width:340px;padding:6px 11px;
+      font:inherit;font-size:12.5px;border:1px solid var(--line);
+      border-radius:8px;background:var(--card);color:var(--ink)}
+#facets input:focus{border-color:var(--accent);outline:none}
+#clearf{font:inherit;font-size:11.5px;font-weight:600;padding:5px 10px;
+      border-radius:7px;border:1px solid var(--line);background:var(--card);
+      color:var(--mut);cursor:pointer}
+#clearf:hover{border-color:var(--accent);color:var(--accent)}
+#clearf.idle{opacity:.35}
+#list{width:min(1000px,100%);overflow-y:auto;flex:1;padding:12px 16px 90px}
+.row{background:var(--card);border:1px solid var(--line);border-radius:10px;
+     box-shadow:var(--shadow);padding:11px 14px;margin-bottom:7px;display:flex;
+     gap:13px;align-items:flex-start;cursor:default;scroll-margin:14px}
+.row.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--infobg)}
+.row.done{opacity:.55}
+.row.done .title{text-decoration:line-through}
+.mark{width:22px;height:22px;border-radius:6px;border:1.5px solid var(--line);
+      flex:0 0 auto;margin-top:2px;display:flex;align-items:center;
+      justify-content:center;font-size:13px;font-weight:700;cursor:pointer;
+      background:var(--bg);color:var(--mut);user-select:none}
+.mark:hover{border-color:var(--accent);color:var(--accent)}
+.row.s-applied .mark{background:var(--okbg);border-color:var(--ok);color:var(--ok)}
+.row.s-skipped .mark{background:var(--bg);border-color:var(--mut);color:var(--mut)}
+.row.s-dead .mark{background:var(--badbg);border-color:var(--bad);color:var(--bad)}
+/* In flight: amber, and NOT dimmed — .done is withheld from this status
+   because a half-finished application is live work, not a closed-out row. */
+.row.s-applying .mark{background:var(--warnbg);border-color:var(--warn);
+      color:var(--warn)}
+.row.s-applying{border-left:3px solid var(--warn)}
+.body{flex:1;min-width:0}
+.title{font-size:15px;font-weight:700;letter-spacing:-.2px;line-height:1.3}
+.title a{color:inherit;text-decoration:none}
+.title a:hover{color:var(--accent);text-decoration:underline}
+.co{font-size:13px;font-weight:600;color:var(--mut);margin-bottom:5px}
+.pills{display:flex;gap:5px;flex-wrap:wrap}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
+      font-weight:600;white-space:nowrap}
+.ok{background:var(--okbg);color:var(--ok)}.warn{background:var(--warnbg);color:var(--warn)}
+.bad{background:var(--badbg);color:var(--bad)}.info{background:var(--infobg);color:var(--accent)}
+.dim{background:var(--bg);color:var(--mut);border:1px solid var(--line)}
+.acts{display:flex;gap:5px;flex:0 0 auto;align-items:center}
+.acts button{font:inherit;font-size:11.5px;font-weight:600;padding:4px 9px;
+     border-radius:7px;border:1px solid var(--line);background:var(--card);
+     color:var(--mut);cursor:pointer;white-space:nowrap}
+.acts button:hover{border-color:var(--accent);color:var(--accent)}
+.acts a{font-size:11.5px;font-weight:600;padding:4px 9px;border-radius:7px;
+     border:1px solid var(--line);color:var(--accent);text-decoration:none;
+     white-space:nowrap}
+.acts a:hover{background:var(--infobg)}
+.acts .none{color:var(--mut);opacity:.5;border-style:dashed}
+.when{font-size:11px;color:var(--mut);font-variant-numeric:tabular-nums;
+      white-space:nowrap}
+.keys{position:fixed;bottom:0;left:0;right:0;background:var(--card);
+      border-top:1px solid var(--line);padding:8px 16px;display:flex;gap:9px;
+      flex-wrap:wrap;justify-content:center;font-size:12px;color:var(--mut)}
+.keys span{white-space:nowrap}
+kbd{background:var(--bg);border:1px solid var(--line);border-bottom-width:2px;
+    border-radius:5px;padding:1px 6px;font:600 11px/1.6 ui-monospace,Menlo,monospace;
+    color:var(--ink)}
+.empty{text-align:center;color:var(--mut);padding:60px 20px}
+.empty b{display:block;font-size:17px;color:var(--ink);margin-bottom:7px}
+.toast{position:fixed;bottom:52px;left:50%;transform:translateX(-50%);
+       background:var(--ink);color:var(--bg);padding:10px 20px;border-radius:9px;
+       font-weight:600;opacity:0;transition:opacity .18s;pointer-events:none;z-index:20}
+.toast.on{opacity:1}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);
+       color:var(--ink);padding:22px 26px;max-width:460px;box-shadow:var(--shadow);
+       margin:auto}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog h3{font-size:16px;margin-bottom:9px}
+dialog p{color:var(--mut);font-size:13.5px;margin-bottom:16px}
+dialog button{font:inherit;font-weight:600;padding:7px 15px;border-radius:8px;
+       border:1px solid var(--line);background:var(--card);color:var(--ink);
+       cursor:pointer}
+#help{font-size:13px;line-height:2}
+#help kbd{margin-right:8px}
+a{color:var(--accent)}
+</style></head>
+<body>
+<header>
+  <h1>Apply<a href="/">&larr; triage</a><a href="/today">today &rarr;</a></h1>
+  <span id="stats"></span>
+  <div id="tabs"></div>
+</header>
+<div id="bar"><div id="barfill" style="width:0"></div></div>
+<main>
+  <div id="facets">
+    <div id="chips"></div>
+    <input id="q" placeholder="title or company — enter to run">
+    <button id="clearf" title="clear every filter">clear</button>
+  </div>
+  <div id="list"></div>
+</main>
+<div class="keys">
+  <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> move</span>
+  <span><kbd>enter</kbd> open</span><span><kbd>p</kbd> applying</span>
+  <span><kbd>a</kbd> applied</span>
+  <span><kbd>s</kbd> skip</span><span><kbd>x</kbd> dead</span>
+  <span><kbd>u</kbd> undo</span><span><kbd>1</kbd>-<kbd>6</kbd> tab</span>
+  <span><kbd>f</kbd><kbd>b</kbd><kbd>l</kbd> filters</span>
+  <span><kbd>t</kbd> sort</span>
+  <span><kbd>/</kbd> search</span><span><kbd>esc</kbd> clear</span>
+  <span><kbd>?</kbd> help</span>
+</div>
+<div class="toast" id="toast"></div>
+<dialog id="helpdlg"><h3>Keys</h3><div id="help">
+  <div><kbd>&uarr;</kbd><kbd>&darr;</kbd>move · <kbd>j</kbd><kbd>k</kbd> also work</div>
+  <div><kbd>enter</kbd>open the apply URL in a new tab (marks nothing)</div>
+  <div><kbd>p</kbd>applying — started it, not sent yet (press again to undo)</div>
+  <div><kbd>a</kbd>applied — stamps today's date</div>
+  <div><kbd>s</kbd>skipped — looked and passed</div>
+  <div><kbd>x</kbd>dead — listing gone or closed</div>
+  <div><kbd>u</kbd>undo the last mark</div>
+  <div><kbd>f</kbd>source — all / employer-direct / aggregator</div>
+  <div><kbd>b</kbd>AI band — any / 1–2 / 1 only</div>
+  <div><kbd>l</kbd>where — any / MA area / remote / South FL</div>
+  <div><kbd>t</kbd>sort — fit / newest posted / oldest posted</div>
+  <div><kbd>1</kbd>-<kbd>6</kbd>switch tab · <kbd>/</kbd>search · <kbd>Esc</kbd>clear filters</div>
+  <div style="margin-top:10px;font-weight:600">What came back &mdash; shift + letter</div>
+  <div><kbd>A</kbd>acknowledged — the auto-reply</div>
+  <div><kbd>R</kbd>rejected</div>
+  <div><kbd>I</kbd>interview or screen requested</div>
+  <div><kbd>O</kbd>offer</div>
+  <div><kbd>G</kbd>ghost — no answer, long enough that it counts as one</div>
+  <div><kbd>C</kbd>clear the outcome</div>
+  </div>
+  <p style="margin-top:14px"><b>Outcome is a separate axis from the mark.</b> The
+  lowercase keys record what <i>you</i> did; shift records what <i>they</i> did, and a
+  rejected application is still an application that was sent. Keeping them apart is the
+  whole point: 188 applications went out across ten days with 73% into one lane and no
+  way to tell whether that lane converted at 5% or 0%. Run
+  <code>apply/inbox_read.py --write</code> to backfill these from Gmail rather than
+  typing them in.</p>
+  <p style="margin-top:14px">Each filter key cycles its own chips; the three
+  stack, and the number on a chip is what you get by clicking it — the current
+  filter with that one row lifted. The tab badges count the filtered set too,
+  so <b>to go</b> means to go <i>here</i>, not in the whole queue. Filters stick
+  across tab switches and reloads; <kbd>Esc</kbd> clears the lot.</p>
+  <p style="margin-top:14px"><b>Sort</b> is not a filter — it reorders the queue
+  without changing what is in it, so it carries no count, <kbd>Esc</kbd> leaves
+  it alone, and every tab badge reads the same under all three. <b>Fit</b> is
+  the ranking this page has always used: employer boards before aggregators,
+  strongest AI band first. <b>Newest</b> and <b>Oldest</b> put the posting date
+  in front of that instead. Anything in flight stays pinned to the top either
+  way, and postings whose source never published a date sort last, not first —
+  blank means unknown, not old.</p>
+  <p style="margin-top:14px"><b>Applying</b> is for a form you opened and did not
+  finish — a long application, one waiting on a referral, one you saved a draft
+  of. It stamps no date and does not fill the progress bar; only
+  <kbd>a</kbd> does. Marking it applied later stamps that day, not the day you
+  started.</p>
+  <p style="margin-top:14px"><b>Shift-click</b> a mark box to set every row
+  between the last one you marked and that one — the fast way to log a run you
+  already applied to.</p>
+  <p>Marks save as you go and survive every rebuild. Run
+  <code>python3 triage_export.py</code> any time for the workbook.</p>
+  <button id="helpno">Close</button></dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+// fetch RESOLVES on a 500, so an unchecked .then() would treat a failed save as
+// a success and the batch — already spliced out of S.pending — would be gone.
+// Throw instead, so flush()'s .catch puts the marks back.
+const api = (p, o) => fetch(p, o).then(r => {
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}).then(d => { if (d && d.error) throw new Error(d.error); return d; });
+const LABEL = {to_apply: 'To apply', applying: 'Applying', applied: 'Applied',
+               skipped: 'Skipped', dead: 'Dead', '': 'All'};
+const GLYPH = {to_apply: '', applying: '…', applied: '✓', skipped: '–',
+               dead: '×'};
+const TABS = ['to_apply', 'applying', 'applied', 'skipped', 'dead', ''];
+// Started but not submitted — everything that treats a status as "finished
+// with" has to ask this, not `!== 'to_apply'`.
+const LIVE = s => s === 'to_apply' || s === 'applying';
+
+// The filter bar.  Names and option values are the API's own (see
+// apply_queue.FACETS) — the server owns what they mean, this owns only how
+// they read, so there is no second definition here to drift out of step.
+// First option of each is the unset one and must stay '' (see load()).
+const FACETS = {
+  src:  ['Source', [['', 'All'], ['direct', 'Direct'], ['agg', 'Aggregator']]],
+  band: ['Band',   [['', 'Any'], ['12', '1–2'], ['1', '1 only']]],
+  loc:  ['Where',  [['', 'Any'], ['ma', 'MA area'], ['remote', 'Remote'],
+                    ['sfl', 'South FL']]],
+};
+const FKEYS = Object.keys(FACETS);
+// Sort rides in the same bar and the same stored object, but deliberately NOT
+// in FKEYS: it reorders the queue without narrowing it, so it must not count
+// as a filter for `clear`, for Esc, or for the "nothing matches that filter"
+// empty state — none of which would be true of a sort.  Values are the API's
+// (lanes.SORTS); '' is 'fit', the ranking the page has always had.
+const SORT = ['Sort', [['', 'Fit'], ['new', 'Newest'], ['old', 'Oldest']]];
+const GROUPS = [['sort', SORT]].concat(FKEYS.map(k => [k, FACETS[k]]));
+const SKEYS = GROUPS.map(([k]) => k);          // every chip group, sort included
+const FSTORE = 'apply.filters';
+
+function optsFor(k) { return (k === 'sort' ? SORT : FACETS[k])[1]; }
+
+function loadFilters() {
+  const f = {};
+  SKEYS.forEach(k => f[k] = '');
+  try {
+    const saved = JSON.parse(localStorage.getItem(FSTORE) || '{}');
+    // Validated against the option lists this build knows, not trusted: a
+    // value left behind by an older build would be a 500 on every load, with
+    // nothing on the page to explain why the list is empty.
+    SKEYS.forEach(k => {
+      if (optsFor(k).some(([v]) => v === saved[k])) f[k] = saved[k];
+    });
+  } catch (e) { /* corrupt or storage off — start clean */ }
+  return f;
+}
+const saveFilters = () => {
+  try { localStorage.setItem(FSTORE, JSON.stringify(S.f)); } catch (e) {}
+};
+
+const S = {
+  status: 'to_apply', q: '', jobs: [], counts: {}, i: 0,
+  f: loadFilters(),  // chip selections, persisted; survives a tab switch
+  facets: {},        // {facet: {option: n}} — the numbers on the chips
+  anchor: null,      // last row marked by hand — the other end of a shift-range
+  pending: [],       // not yet flushed to the server
+  undoStack: [],
+  loading: false,
+};
+let flushTimer = null;
+const filtered = () => !!S.q || FKEYS.some(k => S.f[k]);
+
+const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g,
+  c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+// Local, not UTC: this is the date you will tell a recruiter you applied, and
+// it has to match what apply_queue.set_status wrote (date('now','localtime')).
+function today() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function money(c) {
+  const f = v => {
+    const n = parseFloat(v); if (!isFinite(n) || n <= 0) return null;
+    return n >= 1000 ? '$' + Math.round(n / 1000) + 'k' : '$' + Math.round(n);
+  };
+  const a = f(c.salary_min), b = f(c.salary_max);
+  if (!a && !b) return null;
+  const r = a && b ? (a === b ? a : a + '–' + b) : (a || b);
+  const p = (c.salary_period || '').toLowerCase();
+  return r + (p && p !== 'year' && p !== 'yearly' ? ' /' + p : '');
+}
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 1600);
+}
+
+/* ---------------------------------------------------------------- rendering */
+function renderTabs() {
+  $('#tabs').innerHTML = TABS.map((s, k) =>
+    `<button data-s="${s}" class="${s === S.status ? 'on' : ''}">
+       <kbd>${k + 1}</kbd>${LABEL[s]}<b>${(s === ''
+         ? (S.counts.total || 0) : (S.counts[s] || 0)).toLocaleString()}</b>
+     </button>`).join('');
+  $('#tabs').querySelectorAll('button').forEach(b =>
+    b.onclick = () => pick(b.dataset.s));
+  // 'applying' is deliberately absent: an application you have opened but not
+  // sent is not progress, and letting it fill the bar would show a finished
+  // run you never actually submitted.
+  const done = (S.counts.applied || 0) + (S.counts.skipped || 0)
+             + (S.counts.dead || 0);
+  const tot = S.counts.total || 0;
+  const ing = S.counts.applying || 0;
+  $('#stats').textContent = tot
+    ? `${S.counts.applied || 0} applied · ${ing ? ing + ' applying · ' : ''}`
+      + `${S.counts.to_apply || 0} to go`
+    : '';
+  $('#barfill').style.width = tot ? (100 * done / tot) + '%' : '0';
+}
+
+function renderChips() {
+  // The sort group carries no badge and never dims: S.facets has no entry for
+  // it, so the count lookup below comes back undefined and both the <b> and
+  // the .zero class fall away on their own.  A count on a sort chip would be
+  // the same number three times over.
+  $('#chips').innerHTML = GROUPS.map(([k, [label, opts]]) => {
+    return `<div class="fg"><span class="fl">${label}</span>` + opts.map(
+      ([v, text]) => {
+        const n = (S.facets[k] || {})[v];
+        return `<button data-f="${k}" data-v="${v}" class="${
+          S.f[k] === v ? 'on ' : ''}${n === 0 ? 'zero' : ''}">${text}${
+          n == null ? '' : `<b>${n.toLocaleString()}</b>`}</button>`;
+      }).join('') + '</div>';
+  }).join('');
+  $('#chips').querySelectorAll('button').forEach(b =>
+    b.onclick = () => setFacet(b.dataset.f, b.dataset.v));
+  $('#clearf').classList.toggle('idle', !filtered());
+}
+
+// Shift + a letter records what the EMPLOYER did. Lowercase keys are all taken by the
+// status marks, and the two axes have to stay separate — collapsing them is what left
+// 188 applications unable to say which lane converted.
+const OUTCOMES = {A: 'acknowledged', R: 'rejected', I: 'interview',
+                  O: 'offer', G: 'ghost', C: ''};
+const OUTCOME_PILL = {interview: 'ok', offer: 'ok', rejected: 'bad',
+                      acknowledged: 'info', ghost: 'dim'};
+
+function setOutcome(idx, outcome) {
+  const c = S.jobs[idx];
+  if (!c) return;
+  // Sent straight through rather than batched into S.pending: outcomes arrive a handful
+  // at a time, and unlike a status mark there is no run of them to coalesce.
+  if (c.status === 'to_apply') { toast('mark it applied first'); return; }
+  const was = c.outcome;
+  c.outcome = outcome;                       // optimistic, same as mark()
+  c.outcome_at = outcome ? new Date().toISOString().slice(0, 10) : '';
+  paint();
+  fetch('/api/apply/outcome', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({job_key: c.job_key, outcome})})
+    .then(r => r.json())
+    .then(r => { if (r.error) throw new Error(r.error); })
+    .catch(err => { c.outcome = was; paint(); toast('outcome failed: ' + err.message); });
+}
+
+function rowHTML(c, idx) {
+  const sal = money(c), pills = [];
+  if (c.ai_band) pills.push([c.ai_band, +c.ai_band[0] <= 2 ? 'ok' : 'info']);
+  if (c.bucket === 'MA local') pills.push(['MA', 'warn']);
+  if (sal) pills.push([sal, 'ok']);
+  if (c.location) pills.push([c.location, 'dim']);
+  // `~` and a warning colour when `posted` is an ingest date rather than the
+  // employer's -- 84% of this queue is. See date_basis.py.
+  if (c.posted) pills.push([(+c.date_weak ? 'seen ~' : 'posted ') + c.posted,
+                            +c.date_weak ? 'warn' : 'dim']);
+  pills.push([c.source + (+c.is_agg ? ' (aggregator)' : ''),
+              +c.is_agg ? 'bad' : 'dim']);
+  // What came back, on a different axis from status: a rejected application is still
+  // an application that was sent, so this rides alongside the mark rather than replacing it.
+  if (c.outcome) pills.push([c.outcome + (c.outcome_at ? ' ' + c.outcome_at : ''),
+                             OUTCOME_PILL[c.outcome] || 'info']);
+  const url = c.apply_url || c.job_url;
+  const cls = ['row', 's-' + c.status];
+  if (idx === S.i) cls.push('sel');
+  if (!LIVE(c.status)) cls.push('done');
+  return `<div class="${cls.join(' ')}" data-i="${idx}">
+    <div class="mark" data-mark="${idx}" title="click to mark applied · shift-click for a range">${GLYPH[c.status]}</div>
+    <div class="body">
+      <div class="title">${url
+        ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(c.title)}</a>`
+        : esc(c.title)}</div>
+      <div class="co">${esc(c.company) || '(no company)'}</div>
+      <div class="pills">${pills.map(([t, k]) =>
+        `<span class="pill ${k}">${esc(t)}</span>`).join('')}</div>
+    </div>
+    <div class="acts">
+      ${c.applied_at ? `<span class="when">${esc(c.applied_at)}</span>` : ''}
+      ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">open ↗</a>`
+            : `<span class="none">no link</span>`}
+      <button data-set="applying" data-i="${idx}">applying</button>
+      <button data-set="applied" data-i="${idx}">applied</button>
+      <button data-set="skipped" data-i="${idx}">skip</button>
+      <button data-set="dead" data-i="${idx}">dead</button>
+    </div></div>`;
+}
+
+function render() {
+  const el = $('#list');
+  if (!S.jobs.length) {
+    el.innerHTML = S.loading
+      ? `<div class="empty">loading…</div>`
+      : `<div class="empty"><b>${filtered() ? 'Nothing matches that filter.'
+          : S.status === 'to_apply' ? 'Nothing left to apply to.'
+          : S.status === 'applying' ? 'Nothing in flight.'
+          : 'Nothing here yet.'}</b>${filtered()
+          ? 'Press <kbd>Esc</kbd> to clear the filters.'
+          : S.status === 'to_apply'
+            ? `Approve more in <a href="/">triage</a> and they show up here, or
+               run <code>python3 triage_export.py</code> for the workbook.`
+            : S.status === 'applying'
+              ? `Press <kbd>p</kbd> on a row you have started but not sent, and
+                 it waits here until you mark it applied.`
+              : 'Switch tabs with <kbd>1</kbd>–<kbd>6</kbd>.'}</div>`;
+    return;
+  }
+  el.innerHTML = S.jobs.map(rowHTML).join('');
+  el.querySelectorAll('[data-mark]').forEach(m => m.onclick = e => {
+    const i = +m.dataset.mark;
+    // Shift-click sets the whole span back to the last row you marked, so a
+    // run you already worked through goes in with two clicks, not twenty.
+    if (e.shiftKey && S.anchor != null) markRange(S.anchor, i, 'applied');
+    else mark(i, S.jobs[i].status === 'applied' ? 'to_apply' : 'applied');
+  });
+  el.querySelectorAll('[data-set]').forEach(b => b.onclick = e => {
+    const i = +b.dataset.i, want = b.dataset.set;
+    if (e.shiftKey && S.anchor != null) markRange(S.anchor, i, want);
+    else mark(i, S.jobs[i].status === want ? 'to_apply' : want);
+  });
+  el.querySelectorAll('.row').forEach(r => r.onmousedown = e => {
+    if (e.target.closest('a,button,.mark')) return;
+    S.i = +r.dataset.i; paint();
+  });
+}
+
+/** Repaint selection + status without rebuilding the list (keeps scroll). */
+function paint() {
+  $('#list').querySelectorAll('.row').forEach(r => {
+    const i = +r.dataset.i, c = S.jobs[i];
+    r.classList.toggle('sel', i === S.i);
+    r.className = r.className.replace(/s-\w+/, 's-' + c.status);
+    r.classList.toggle('done', !LIVE(c.status));
+    r.querySelector('.mark').textContent = GLYPH[c.status];
+    const w = r.querySelector('.when');
+    if (c.applied_at && !w)
+      r.querySelector('.acts').insertAdjacentHTML('afterbegin',
+        `<span class="when">${esc(c.applied_at)}</span>`);
+    else if (w && !c.applied_at) w.remove();
+    else if (w) w.textContent = c.applied_at;
+  });
+  const sel = $('#list').querySelector('.row.sel');
+  if (sel) sel.scrollIntoView({block: 'nearest'});
+  renderTabs();
+}
+
+/* ------------------------------------------------------------------- data */
+let gen = 0;
+async function load(reset) {
+  const my = ++gen;
+  S.loading = true;
+  if (reset) { S.jobs = []; S.i = 0; S.anchor = null; render(); }
+  const p = new URLSearchParams();
+  if (S.status) p.set('status', S.status);
+  if (S.q) p.set('q', S.q);
+  // Only the set facets go on the URL; '' is "any" and the server reads a
+  // missing param the same way, so an unused filter costs nothing.  Sort goes
+  // the same way, and for the same reason: '' is 'fit' on both sides.
+  SKEYS.forEach(k => { if (S.f[k]) p.set(k, S.f[k]); });
+  let d;
+  try {
+    d = await api('/api/apply/queue?' + p);
+  } catch (e) {
+    // api() throws on {"error": ...} as well as on a bad status, so a filter
+    // value the server rejects lands here rather than as a silent empty list.
+    if (my !== gen) return;
+    S.loading = false; render();
+    return toast(e.message || 'load failed');
+  }
+  if (my !== gen) return;                       // superseded — drop it
+  S.loading = false;
+  S.jobs = d.jobs || []; S.counts = d.counts || {}; S.facets = d.facets || {};
+  S.i = Math.min(S.i, Math.max(0, S.jobs.length - 1));
+  render(); renderTabs(); renderChips();
+}
+
+/** Set one facet and reload.  Chips repaint at once; counts follow the fetch. */
+function setFacet(k, v) {
+  if (S.f[k] === v) return;
+  S.f[k] = v; saveFilters(); renderChips();
+  // Same race as pick(): the POST and the GET run on different threads with
+  // separate connections, so an un-awaited write can commit after the reload's
+  // read snapshot and the mark you just made appears to vanish.
+  flush(true).then(() => load(true));
+}
+
+function cycleFacet(k) {
+  const opts = optsFor(k).map(o => o[0]);
+  setFacet(k, opts[(opts.indexOf(S.f[k]) + 1) % opts.length]);
+}
+
+// FKEYS, not SKEYS: Esc clears what you are looking AT, and the sort is how
+// you are working — resetting it here would make the escape hatch for a bad
+// filter quietly cost you your ordering too.
+function clearFilters() {
+  if (!filtered()) return toast('no filters set');
+  FKEYS.forEach(k => S.f[k] = '');
+  S.q = ''; $('#q').value = '';
+  saveFilters(); renderChips();
+  flush(true).then(() => load(true));
+}
+
+function flush(now) {
+  clearTimeout(flushTimer);
+  const go = () => {
+    if (!S.pending.length) return Promise.resolve();
+    const batch = S.pending.splice(0, S.pending.length);
+    // keepalive so a flush still completes if the tab navigates mid-request —
+    // beforeunload can't rescue a batch that has already left S.pending.
+    return api('/api/apply/status', {method: 'POST', keepalive: true,
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({updates: batch})}).then(r => {
+        if (r && r.missing && r.missing.length)
+          toast(`${r.missing.length} did not save`);
+      }).catch(e => {
+        S.pending.unshift(...batch);            // keep them for the next flush
+        toast('save failed — will retry');
+      });
+  };
+  if (now || S.pending.length >= 10) return go();
+  flushTimer = setTimeout(go, 400);
+  return Promise.resolve();
+}
+
+/* ---------------------------------------------------------------- actions */
+function apply1(i, status, undoBatch) {
+  const c = S.jobs[i];
+  if (!c) return;
+  // job_key, NOT the row index: load() rebuilds S.jobs on every tab switch and
+  // filter, and an index captured before that would point at a different job
+  // afterwards — undo would then clear some other job's applied record.
+  undoBatch.push({job_key: c.job_key, status: c.status,
+                  applied_at: c.applied_at});
+  if (S.counts[c.status] != null) S.counts[c.status]--;
+  c.status = status;
+  c.applied_at = status === 'applied' ? (c.applied_at || today()) : '';
+  if (S.counts[status] != null) S.counts[status]++;
+  S.pending.push({job_key: c.job_key, status});
+}
+
+function mark(i, status) {
+  const undoBatch = [];
+  apply1(i, status, undoBatch);
+  if (!undoBatch.length) return;
+  S.undoStack.push(undoBatch);
+  S.anchor = i;
+  S.i = Math.min(i + 1, S.jobs.length - 1);     // advance, like the card flow
+  paint(); flush();
+}
+
+function markRange(from, to, status) {
+  const [a, b] = from <= to ? [from, to] : [to, from];
+  const undoBatch = [];
+  for (let i = a; i <= b; i++) apply1(i, status, undoBatch);
+  if (!undoBatch.length) return;
+  S.undoStack.push(undoBatch);
+  S.anchor = to;
+  paint(); flush();
+  toast(`${undoBatch.length} marked ${status}`);
+}
+
+function undo() {
+  const batch = S.undoStack.pop();
+  if (!batch) return toast('nothing to undo');
+  batch.forEach(u => {
+    // The DB write is keyed on job_key and is correct whether or not the row
+    // is still on screen; the local patch only applies if it is.
+    S.pending.push({job_key: u.job_key, status: u.status,
+                    applied_at: u.applied_at});
+    const c = S.jobs.find(x => x.job_key === u.job_key);
+    if (!c) return;
+    if (S.counts[c.status] != null) S.counts[c.status]--;
+    c.status = u.status; c.applied_at = u.applied_at;
+    if (S.counts[c.status] != null) S.counts[c.status]++;
+  });
+  const back = S.jobs.findIndex(x => x.job_key === batch[0].job_key);
+  if (back >= 0) S.i = back;
+  S.anchor = null;
+  paint(); flush();
+  toast(batch.length > 1 ? `undone (${batch.length})` : 'undone');
+}
+
+// The chips deliberately survive a tab switch — "direct, band 1" is how you
+// are working, not which pile you are looking at, and re-picking it on every
+// tab would be the whole point of the bar undone.  The text box still clears,
+// as it always has: that one is a lookup, not a stance.
+async function pick(status) {
+  if (status === S.status) return;
+  S.status = status; S.q = ''; $('#q').value = '';
+  renderTabs();
+  // Await the flush: the POST and the GET run on different threads with
+  // separate connections, so an un-awaited write can commit after the reload's
+  // read snapshot and the mark you just made appears to vanish.
+  await flush(true);
+  load(true);
+}
+
+function move(d) {
+  if (!S.jobs.length) return;
+  S.i = Math.max(0, Math.min(S.jobs.length - 1, S.i + d));
+  paint();
+}
+
+function openSel() {
+  const c = S.jobs[S.i];
+  if (c && (c.apply_url || c.job_url))
+    window.open(c.apply_url || c.job_url, '_blank', 'noopener');
+}
+
+/* ------------------------------------------------------------------- keys */
+document.addEventListener('keydown', e => {
+  if (document.querySelector('dialog[open]')) return;
+  if (e.target.tagName === 'INPUT') {
+    // Same race as pick(): flush before reloading, or pending marks visibly
+    // revert when the filtered list comes back.
+    if (e.key === 'Enter') { S.q = e.target.value.trim(); e.target.blur();
+                             flush(true).then(() => load(true)); }
+    // Clears the text box only.  Esc again — now that focus has left it —
+    // clears the chips too, so the two-step gets you back to the full queue
+    // without a filter key ever wiping more than you were looking at.
+    if (e.key === 'Escape') { e.target.value = ''; e.target.blur();
+                              if (S.q) { S.q = '';
+                                flush(true).then(() => load(true)); } }
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  if (k === 'ArrowDown' || k === 'j') { e.preventDefault(); move(1); }
+  else if (k === 'ArrowUp' || k === 'k') { e.preventDefault(); move(-1); }
+  else if (k === 'Enter' || k === 'o') { e.preventDefault(); openSel(); }
+  else if (k === 'a') { e.preventDefault(); mark(S.i, 'applied'); }
+  // 'p' for in-progress — 'a' is applied and has to stay there.  Toggles back
+  // to to_apply, so hitting it on a row already marked is how you back out.
+  else if (k === 'p') { e.preventDefault();
+                        mark(S.i, S.jobs[S.i] && S.jobs[S.i].status === 'applying'
+                                  ? 'to_apply' : 'applying'); }
+  else if (k === 's') { e.preventDefault(); mark(S.i, 'skipped'); }
+  else if (k === 'x') { e.preventDefault(); mark(S.i, 'dead'); }
+  else if (k === 'u') { e.preventDefault(); undo(); }
+  else if (k >= '1' && k <= '6') { const s = TABS[+k - 1];
+                                   if (s !== undefined) pick(s); }
+  else if (k === 'f') { e.preventDefault(); cycleFacet('src'); }
+  else if (k === 'b') { e.preventDefault(); cycleFacet('band'); }
+  else if (k === 'l') { e.preventDefault(); cycleFacet('loc'); }
+  // 't' for time-posted, and the same key on the triage page: 'd' is deny
+  // there and 's' is skip here, so it is the one letter both pages can spare.
+  else if (k === 't') { e.preventDefault(); cycleFacet('sort'); }
+  else if (k === 'Escape') { e.preventDefault(); clearFilters(); }
+  else if (k === '/') { e.preventDefault(); $('#q').focus(); $('#q').select(); }
+  else if (k === '?') { $('#helpdlg').showModal(); }
+  // Shift + letter = what came back. Checked last so it can never shadow a status key.
+  else if (Object.prototype.hasOwnProperty.call(OUTCOMES, k)) {
+    e.preventDefault(); setOutcome(S.i, OUTCOMES[k]);
+  }
+});
+
+$('#clearf').onclick = clearFilters;
+$('#helpno').onclick = () => $('#helpdlg').close();
+// A mark sitting in S.pending must not die with the tab.
+window.addEventListener('beforeunload', () => {
+  if (!S.pending.length) return;
+  navigator.sendBeacon('/api/apply/status',
+    new Blob([JSON.stringify({updates: S.pending})],
+             {type: 'application/json'}));
+});
+setInterval(() => flush(true), 5000);           // safety net for a stalled batch
+
+renderChips();                                  // labels now, counts on load
+load(true);
+</script>
+</body></html>

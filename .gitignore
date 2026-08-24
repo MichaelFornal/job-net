@@ -1,0 +1,87 @@
+# Data, not code.  This repo versions the pipeline's source only — the corpus
+# is multi-GB and is reproduced by running the pipeline, not by checkout.
+
+# --- corpus + artifacts ---
+*.jsonl
+*.csv
+*.xlsx
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.npz
+
+# --- fetcher state, ledgers, caches ---
+# Load-bearing (a lost state file costs hours of re-crawl) but machine state,
+# not source: they churn on every run and mean nothing on another machine.
+*_state.json
+*_ledger.json
+*.full
+*.prev.json
+*.bak
+*.bak-*
+*_posted_ledger.json
+date_basis_index.json
+*_cache.json
+*_done.txt
+*_seen_keys.txt
+*_slugs.json
+*_companies.json
+*_collections.jsonl*
+*.scanned
+*.progress
+
+# --- harvested inventories ---
+# Deliberately not versioned: this repo publishes the discovery METHOD, not a
+# scraped list of other people's ATS endpoints.  Rebuild them with the
+# *_discover_boards.py / *_probe_boards.py scripts.
+getro_boards_urls.txt
+*_wayback_urls.txt
+slug_discovery_report.txt
+
+# --- local configuration and local state ---
+# profile.example.json is versioned; your own copy is not.  The blocklist is
+# hand-edited but per-machine: triage_load.py recreates it with a header.
+profile.json
+triage_blocklist.txt
+
+# --- run output ---
+logs/
+*.out
+*.log
+*.status
+nohup.out
+*.pid
+
+# --- generated documents + assets ---
+*.pdf
+*.png
+*.jpg
+
+# --- snapshots + scratch ---
+ats_snapshot_*/
+preflight_*/
+tenants/
+scanned/
+*.tmp
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- macOS ---
+.DS_Store
+
+# --- the identity-specific half of the PII scanner ---
+# tools/denylist.txt is generic and versioned.  The patterns naming real
+# people, employers and places stay local: publishing them would disclose
+# precisely what the scanner exists to prevent.
+tools/denylist.local.txt
+
+# --- secrets ---
+.env
+*.key
+credentials.json
+secrets.json

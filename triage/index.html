@@ -1,0 +1,1677 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Triage</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#f5f6f8;--card:#fff;--line:#e4e8ed;--ink:#14161a;--mut:#606a78;
+      --accent:#1c3f94;--ok:#12683a;--okbg:#e5f6ea;--warn:#7a5200;--warnbg:#fdf0d5;
+      --bad:#8b1a1a;--badbg:#fde8e8;--infobg:#e8eefc;--shadow:0 1px 3px rgba(0,0,0,.07)}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--line:#262c35;
+      --ink:#e8ebef;--mut:#9aa5b4;--accent:#6f97ff;--ok:#5ed69a;--okbg:#12301f;
+      --warn:#e3b95e;--warnbg:#332811;--bad:#ff8f8f;--badbg:#3a1717;--infobg:#18233d;
+      --shadow:0 1px 3px rgba(0,0,0,.4)}}
+/* Header across the top, lane rail down the left, card in what's left.  The
+   rail is a grid column rather than a fixed/absolute overlay so `main` needs no
+   left margin that has to be kept in step with the rail's width, and so
+   collapsing it (key `g`) is one grid-template-columns change. */
+/* The rail's width is a variable rather than a literal because the drag grip
+   writes it: one custom property is the only thing the resize has to move, and
+   `main` still takes whatever is left without knowing the number. */
+:root{--rail:232px}
+body{font:14px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+     background:var(--bg);color:var(--ink);overflow:hidden;
+     height:100vh;display:grid;grid-template-rows:46px 1fr;
+     grid-template-columns:var(--rail) 1fr}
+body.railoff{grid-template-columns:0 1fr}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:9px 18px;
+       display:flex;align-items:center;gap:14px;height:46px;grid-column:1/-1}
+h1{font-size:14px;letter-spacing:-.2px;font-weight:700}
+h1 a{color:var(--mut);font-weight:600;text-decoration:none;margin-left:9px;
+     font-size:12.5px}
+h1 a:hover{color:var(--accent)}
+/* Same segmented control as the apply page's filter bar, so the one thing both
+   pages share looks like one thing.  A class rather than #sortbar because the
+   view switch is the second one of these in the same header, and two controls
+   that sit side by side have to be the same control. */
+.seg{display:flex;align-items:center}
+.seg .fl{font-size:10.5px;font-weight:700;color:var(--mut);letter-spacing:.5px;
+     text-transform:uppercase;margin-right:7px}
+.seg button{font:inherit;font-size:12px;font-weight:600;padding:3px 9px;
+     border:1px solid var(--line);background:var(--card);color:var(--mut);
+     cursor:pointer;margin-left:-1px;position:relative;white-space:nowrap}
+.seg button:first-of-type{border-radius:7px 0 0 7px;margin-left:0}
+.seg button:last-child{border-radius:0 7px 7px 0}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--infobg);border-color:var(--accent);
+     color:var(--accent);z-index:1}
+/* The lane rail.  Twenty lanes used to be flex-wrap chips in the 46px header:
+   ~4,570px of buttons, so five rows deep at 1280 and still two rows at 2560,
+   with everything past the first row clipped by body{overflow:hidden} and
+   unclickable.  A vertical list has room for all of them, puts the counts in
+   one scannable column, and gives each a heading saying what kind of lane it
+   is — and it costs width the page had spare, since the card is capped at
+   760px and was floating in a sea of empty space. */
+/* Both children are placed explicitly.  Hiding the rail takes it out of the
+   grid's flow, and without a column of its own `main` would slide up into the
+   collapsed 0-width first column and render as a ~40px ribbon down the left
+   edge — which is exactly what it did. */
+#rail{grid-column:1;background:var(--card);border-right:1px solid var(--line);
+     overflow-y:auto;overflow-x:hidden;padding:8px 0 14px}
+body.railoff #rail{display:none}
+#rail .grp{display:flex;align-items:baseline;gap:6px;padding:13px 14px 4px;
+     font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
+     color:var(--mut)}
+#rail .grp:first-child{padding-top:4px}
+#rail .grp b{margin-left:auto;font-weight:600;opacity:.65;letter-spacing:0;
+     font-variant-numeric:tabular-nums}
+#rail button{display:flex;align-items:center;gap:7px;width:100%;text-align:left;
+     background:none;border:0;border-left:3px solid transparent;color:var(--mut);
+     padding:5px 12px 5px 11px;cursor:pointer;font:inherit;font-size:12.5px;
+     font-weight:600}
+#rail button:hover{color:var(--ink);background:var(--bg)}
+#rail button.on{background:var(--infobg);border-left-color:var(--accent);
+     color:var(--accent)}
+/* The label is the only part allowed to shrink, so a long one ellipsizes
+   instead of pushing its count out of the rail.  min-width:0 is what lets a
+   flex child shrink below its content at all; the full text is on `title`. */
+#rail .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+     white-space:nowrap}
+#rail .n{flex:0 0 auto;font-weight:700;font-variant-numeric:tabular-nums;
+     font-size:12px}
+/* Dimmed, not hidden: a burnt-down lane reads as done, where removing it would
+   make the rail reshuffle and leave you unsure the lane still exists.  Same
+   idiom as the apply page's zero-count filter chips. */
+#rail button.zero{opacity:.42}
+/* ...but never the one you are standing in.  A burnt-down lane you have just
+   selected still has to show you that you are in it, and at .42 the highlight
+   is nearly invisible.  Declared after .zero because both are one class deep. */
+#rail button.zero.on{opacity:1}
+#rail kbd{flex:0 0 auto;opacity:.5;font-size:9.5px;padding:0 4px;min-width:17px;
+     text-align:center}
+#railtog{font:inherit;font-size:13px;font-weight:600;color:var(--mut);
+     background:none;border:1px solid transparent;border-radius:7px;
+     padding:2px 8px;cursor:pointer;line-height:1.4}
+#railtog:hover{color:var(--accent);border-color:var(--line)}
+/* The resize grip.  Fixed and sitting ON the rail's border rather than inside
+   the rail, because #rail scrolls: a child of it would slide up the page with
+   the lane list.  9px of grab area for a 1px line — the line is the border it
+   already draws, the extra width is only there to be hit. */
+#railgrip{position:fixed;top:46px;bottom:0;left:var(--rail);width:9px;
+     margin-left:-5px;cursor:col-resize;z-index:5;touch-action:none}
+#railgrip::after{content:'';position:absolute;top:0;bottom:0;left:4px;width:1px;
+     background:transparent;transition:background .12s}
+#railgrip:hover::after,#railgrip.drag::after{background:var(--accent)}
+body.railoff #railgrip{display:none}
+/* Held on <body> for the length of a drag: without it the pointer flickers
+   between col-resize and a text caret as it crosses the lane labels, and a fast
+   drag selects half the rail's text on the way past. */
+body.rzing,body.rzing *{cursor:col-resize!important;user-select:none}
+.send{margin:6px 0 2px;font-size:13px;color:var(--accent)}
+.send .sendfiles{color:var(--mut);font-size:11px;margin-left:8px;font-variant-numeric:tabular-nums}
+/* The grid row sizes this now, so no `calc(100vh - 46px)` to keep in step with
+   the header.  min-height:0 stops the card's own scroller from being ignored
+   and the whole column growing past the viewport instead. */
+main{grid-column:2;min-height:0;display:flex;flex-direction:column;
+     align-items:center;justify-content:center;padding:16px;gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+      box-shadow:var(--shadow);padding:24px 28px;width:min(760px,100%);
+      max-height:calc(100vh - 210px);overflow:auto}
+.title{font-size:23px;font-weight:700;letter-spacing:-.4px;line-height:1.25;
+       margin-bottom:7px}
+.co{font-size:15px;font-weight:600;margin-bottom:3px}
+.loc{color:var(--mut);font-size:13.5px;margin-bottom:14px}
+.pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11.5px;
+      font-weight:600;white-space:nowrap}
+.ok{background:var(--okbg);color:var(--ok)}.warn{background:var(--warnbg);color:var(--warn)}
+.bad{background:var(--badbg);color:var(--bad)}.info{background:var(--infobg);color:var(--accent)}
+.dim{background:var(--bg);color:var(--mut);border:1px solid var(--line)}
+.meta{display:grid;grid-template-columns:96px 1fr;gap:4px 12px;font-size:13px;
+      border-top:1px solid var(--line);padding-top:13px}
+.meta dt{color:var(--mut);font-size:12px}
+.meta dd{word-break:break-word}
+/* Every legend entry is a real button, so the row doubles as the mouse UI for
+   the same actions the keys run — one list to keep in step, not two. */
+.keys{display:flex;gap:7px;flex-wrap:wrap;justify-content:center;font-size:12px;
+      color:var(--mut)}
+.keys button{white-space:nowrap;font:inherit;color:inherit;background:none;
+      border:1px solid transparent;border-radius:7px;padding:2px 7px;
+      cursor:pointer}
+.keys button:hover{color:var(--ink);border-color:var(--line);background:var(--card)}
+.keys span{white-space:nowrap;padding:2px 7px}
+kbd{background:var(--card);border:1px solid var(--line);border-bottom-width:2px;
+    border-radius:5px;padding:1px 6px;font:600 11px/1.6 ui-monospace,Menlo,monospace;
+    color:var(--ink)}
+#trail{display:flex;gap:6px;font-size:11.5px;color:var(--mut);height:18px;
+       align-items:center;justify-content:center;flex-wrap:wrap;overflow:hidden}
+#trail span{padding:1px 8px;border-radius:999px;background:var(--card);
+     border:1px solid var(--line);max-width:230px;overflow:hidden;
+     text-overflow:ellipsis;white-space:nowrap}
+#stats{font-size:12px;color:var(--mut);font-variant-numeric:tabular-nums}
+#filter{display:none;width:min(760px,100%)}
+#filter input{width:100%;padding:9px 13px;border:1px solid var(--accent);
+      border-radius:9px;background:var(--card);color:var(--ink);font:inherit}
+.empty{text-align:center;color:var(--mut);padding:44px 20px}
+.empty b{display:block;font-size:17px;color:var(--ink);margin-bottom:7px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+       background:var(--ink);color:var(--bg);padding:10px 20px;border-radius:9px;
+       font-weight:600;opacity:0;transition:opacity .18s;pointer-events:none;z-index:20}
+.toast.on{opacity:1}
+/* margin:auto is what centres a modal dialog; the `*{margin:0}` reset above
+   strips the UA default and pins it to the top-left corner. */
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);
+       color:var(--ink);padding:22px 26px;max-width:430px;box-shadow:var(--shadow);
+       margin:auto}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog h3{font-size:16px;margin-bottom:9px}
+dialog p{color:var(--mut);font-size:13.5px;margin-bottom:16px}
+dialog button{font:inherit;font-weight:600;padding:7px 15px;border-radius:8px;
+       border:1px solid var(--line);background:var(--card);color:var(--ink);
+       cursor:pointer;margin-right:8px}
+/* --bad is a dark red in light mode and a light red in dark mode, so the label
+   has to track --bg rather than being pinned to white. */
+dialog button.danger{background:var(--bad);border-color:var(--bad);color:var(--bg)}
+#help{font-size:13px;line-height:2}
+#help kbd{margin-right:8px}
+a{color:var(--accent)}
+
+/* ---- grid view.  The card page answers "decide this one".  The grid answers
+   the question one card at a time cannot: what IS in this lane -- rows read
+   against each other rather than in series, and a range of obvious denials
+   swept in one keystroke.  Same rows, same keys, same decisions; only the
+   density and the cursor change, which is why `v` is a view toggle and not a
+   mode with rules of its own. */
+/* width:100% as well as align-self:stretch -- stretch alone is correct and
+   sufficient, but only while nothing gives the box a width, and one cell-wide
+   column down the middle of a 1400px window is a silent failure.
+   user-select:none because shift-clicking two cells otherwise smears a text
+   selection across everything between them, the same fight body.rzing picks
+   for the rail drag. */
+#grid{display:none;align-self:stretch;width:100%;flex:1;min-height:0;
+     overflow-y:auto;user-select:none;gap:10px;
+     grid-template-columns:repeat(auto-fill,minmax(255px,1fr));
+     /* max-content, NOT the default auto and not minmax(116px,auto) — both of
+        those size the row from the item's automatic minimum, which is 0 for an
+        overflow:hidden cell, so the row came out at exactly the 116px floor and
+        clipped the bottom off every cell whose pills wrapped to a second line.
+        With max-content the row grows for its content and .gcell's min-height
+        still holds the floor for a short one.  Measured both ways in the
+        browser; the two are not interchangeable here. */
+     grid-auto-rows:max-content;
+     align-content:start;padding:2px}
+body.gridview #grid{display:grid}
+#grid .empty{grid-column:1/-1}
+body.gridview #card,body.gridview #trail{display:none}
+/* `main` centres a single card.  The grid has to start top-left and take the
+   full width instead -- align-self:stretch above is what overrides the parent's
+   align-items:center, without which the grid shrinks to one content-wide
+   column floating in the middle of the page. */
+body.gridview main{justify-content:flex-start;gap:8px}
+.gcell{position:relative;background:var(--card);border:1px solid var(--line);
+     border-radius:10px;padding:10px 12px 9px;cursor:pointer;overflow:hidden;
+     display:flex;flex-direction:column;gap:2px;min-height:116px;
+     scroll-margin:14px}
+.gcell:hover{border-color:var(--mut)}
+/* Nothing in a cell may shrink.  These are flex items in a column, so they
+   default to flex-shrink:1 — and the moment the pills wrap to a second line the
+   content is taller than min-height and EVERY child gives up a pixel or two to
+   fit, which took the descenders off the bottom line of every title on the
+   page.  Fixed size, and the cell grows instead; the row grows with it. */
+.gcell>*{flex:0 0 auto}
+/* The cursor is a ring, not a fill: it has to stay legible on top of the dimmed
+   .done state and on top of .sel, and a background colour would lose to both. */
+.gcell.sel{background:var(--infobg);border-color:var(--accent)}
+.gcell.cur{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.gcell.done{opacity:.5}
+.gcell.done .gtitle{text-decoration:line-through}
+.gtitle{font-size:13.5px;font-weight:700;line-height:1.3;letter-spacing:-.2px;
+     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+     overflow:hidden}
+.gco{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;
+     text-overflow:ellipsis}
+.gloc{font-size:11.5px;color:var(--mut);white-space:nowrap;overflow:hidden;
+     text-overflow:ellipsis}
+/* The date shares the location's line and gets the fixed slot, because it is
+   the one field in a cell you read ACROSS cells rather than within one — a
+   long location must ellipsize around it, never push it out of the cell. */
+.gline{display:flex;align-items:baseline;gap:8px}
+.gline .gloc{flex:1;min-width:0}
+.gdate{flex:0 0 auto;font-size:11.5px;color:var(--mut);
+     font-variant-numeric:tabular-nums}
+/* Same `~` the card puts on the date itself: this one is not the employer's.
+   The pill already names which fallback produced it; here it is just a warning
+   not to read the number as fact. */
+.gdate.weak{color:var(--warn)}
+.gdate.undated{opacity:.65;font-style:italic}
+.gcell .pills{gap:4px;margin:6px 0 0}
+.gcell .pill{font-size:10.5px;padding:2px 7px}
+/* The verdict, top-right.  A swept range has to read as decided at a glance --
+   the trail only holds four and a bulk decision is one entry.  Absolute so it
+   never reflows the title underneath it. */
+.gmark{position:absolute;top:7px;right:9px;font-size:12px;font-weight:700;
+     color:var(--ok);display:none}
+.gcell.done .gmark{display:block}
+.gcell.v-deny .gmark{color:var(--bad)}
+.gcell.v-maybe .gmark{color:var(--warn)}
+#gbar{display:none;align-self:stretch;align-items:center;gap:10px;font-size:12px;
+     color:var(--mut);font-variant-numeric:tabular-nums;min-height:17px}
+body.gridview #gbar{display:flex}
+#gbar b{color:var(--accent);font-weight:700}
+/* display:contents, so the per-view hints are still direct flex children of
+   .keys and line up in the one row with the shared keys. */
+#gkeys{display:none}
+body.gridview #gkeys{display:contents}
+
+/* ---- scout tuning panel.  Fixed, not a third grid column: the rail/main grid
+   already has the documented trap that hiding a child collapses the other into
+   a 40px ribbon, and an overlay cannot reintroduce it.  It uses the page's own
+   palette variables so it follows prefers-color-scheme with everything else --
+   an earlier draft invented --bg2/--bd/--acc, which do not exist here, so the
+   panel painted its dark fallback under the page's dark-on-light text and every
+   label that was not coloured by another rule came out invisible. */
+#tune{position:fixed;top:46px;right:0;bottom:0;width:330px;z-index:40;
+  background:var(--card);color:var(--ink);border-left:1px solid var(--line);
+  overflow-y:auto;padding:14px 16px 40px;display:none;font-size:12px;
+  box-shadow:var(--shadow)}
+#tune.on{display:block}
+body.tuneon main{padding-right:346px}
+#tune h3{margin:0 0 4px;font-size:10.5px;letter-spacing:.5px;font-weight:700;
+  text-transform:uppercase;color:var(--mut)}
+#tune .sub{color:var(--mut);margin:0 0 12px;line-height:1.5}
+#tune .ax{border-top:1px solid var(--line);padding:9px 0 7px}
+#tune .axhd{display:flex;align-items:center;gap:6px;cursor:pointer}
+#tune .axhd b{flex:1;font-weight:600;color:var(--ink)}
+#tune .axhd .v{color:var(--mut);font-variant-numeric:tabular-nums;min-width:38px;
+  text-align:right}
+#tune .axhd:hover b{color:var(--accent)}
+#tune input[type=range]{width:100%;margin:6px 0 0;accent-color:var(--accent)}
+#tune .subs{display:none;margin:7px 0 2px}
+#tune .subs.on{display:block}
+#tune .sf{display:flex;align-items:center;gap:6px;margin:3px 0}
+#tune .sf span{flex:1;color:var(--mut);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+#tune .sf input{width:58px;background:var(--bg);color:var(--ink);
+  border:1px solid var(--line);border-radius:4px;padding:2px 5px;
+  font:inherit;text-align:right}
+#tune .row{display:flex;gap:6px;margin:10px 0 0}
+#tune button,#tune select{flex:1;background:var(--bg);color:var(--ink);
+  border:1px solid var(--line);border-radius:6px;padding:5px 7px;
+  font:inherit;cursor:pointer}
+#tune button:hover{border-color:var(--accent);color:var(--accent)}
+#tune .bonus{color:var(--warn)}
+.pill.exp{background:var(--infobg);color:var(--accent);border-color:var(--accent)}
+/* The reference number.  Monospace and tabular because this is the one pill you
+   read digit by digit and retype somewhere else, and a proportional 1 next to a
+   7 is exactly where that goes wrong. */
+.pill.ref{background:var(--bg);color:var(--mut);border:1px solid var(--line);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+  letter-spacing:.3px;font-variant-numeric:tabular-nums}
+.whychips{display:flex;flex-wrap:wrap;gap:4px}
+.whychips i{font-style:normal;background:var(--bg);border:1px solid var(--line);
+  border-radius:4px;padding:1px 6px;font-variant-numeric:tabular-nums;
+  font-size:11.5px}
+.whychips i.neg{color:var(--bad);border-color:var(--bad)}
+.whychips i.pos{color:var(--ok);border-color:var(--ok)}
+</style></head>
+<body>
+<header>
+  <button id="railtog" title="show/hide the lane rail (g)">&#9776;</button>
+  <h1>Triage<a href="/today">today &rarr;</a><a href="/apply">apply &rarr;</a></h1>
+  <span id="stats"></span>
+  <div id="sortbar" class="seg" style="margin-left:auto"></div>
+  <div id="viewbar" class="seg"></div>
+</header>
+<aside id="rail"></aside>
+<div id="railgrip" title="drag to widen the lane rail — double-click to fit the longest lane name"></div>
+<aside id="tune"></aside>
+<main>
+  <div id="filter"><input id="q" placeholder="filter this lane by title or company — Enter to apply, Esc to clear"></div>
+  <div id="card" class="card"></div>
+  <div id="gbar"></div>
+  <div id="grid"></div>
+  <div id="trail"></div>
+  <div class="keys" id="keys">
+    <button data-k="a"><kbd>a</kbd> approve</button>
+    <button data-k="A"><kbd>⇧A</kbd> applied</button>
+    <button data-k="d"><kbd>d</kbd> deny</button>
+    <button data-k="m"><kbd>m</kbd> maybe</button>
+    <button data-k="u"><kbd>u</kbd> undo</button>
+    <button data-k="o"><kbd>o</kbd> open</button>
+    <button data-k="x"><kbd>x</kbd> kill company</button>
+    <span><kbd>1</kbd>-<kbd>0</kbd> lane</span><span><kbd>[</kbd><kbd>]</kbd> cycle</span>
+    <button data-k="v"><kbd>v</kbd> <span id="vlabel">grid</span></button>
+    <!-- Spans, not buttons: there is no sane data-k for an arrow key or for
+         space, and a focusable button in this row brings back the
+         space-presses-the-button-again problem the blur() below exists for. -->
+    <span id="gkeys"><span><kbd>&larr;&darr;&uarr;&rarr;</kbd> move</span
+      ><span><kbd>&#8679;</kbd>+move range</span
+      ><span><kbd>space</kbd> pick</span
+      ><span><kbd>esc</kbd> clear</span
+      ><span><kbd>dbl-click</kbd> open</span></span>
+    <button data-k="g"><kbd>g</kbd> rail</button>
+    <button data-k="t"><kbd>t</kbd> sort</button>
+    <button data-k="w"><kbd>w</kbd> weights</button>
+    <button data-k="/"><kbd>/</kbd> filter</button>
+    <button data-k="?"><kbd>?</kbd> help</button>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+<dialog id="killdlg"><h3 id="killh"></h3><p id="killp"></p>
+  <button class="danger" id="killyes">Kill company</button>
+  <button id="killno">Cancel</button></dialog>
+<dialog id="helpdlg"><h3>Keys</h3><div id="help">
+  <div><kbd>a</kbd>approve — goes to Approved_&lt;date&gt;.xlsx</div>
+  <div><kbd>⇧A</kbd>applied — approve <i>and</i> mark it fully applied to, dated
+       today. Skips the /apply checklist entirely: use it right after <kbd>o</kbd>
+       when you have just sent the application. <kbd>u</kbd> takes both back</div>
+  <div><kbd>d</kbd>deny</div>
+  <div><kbd>m</kbd>maybe — revisit later, excluded from the export by default</div>
+  <div><kbd>u</kbd>undo the last decision</div>
+  <div><kbd>o</kbd>open the apply URL in a new tab (does not decide)</div>
+  <div><kbd>x</kbd>kill this company forever — denies every row it has, now and
+       on every future load. Confirms first; <kbd>u</kbd> puts them all back</div>
+  <div><kbd>1</kbd>-<kbd>9</kbd><kbd>0</kbd>first ten lanes, numbered in the rail</div>
+  <div><kbd>[</kbd><kbd>]</kbd>cycle through all <span id="nlanes">the</span> lanes</div>
+  <div><kbd>v</kbd>card &harr; grid. The grid shows a lane two dozen rows at a
+       time instead of one, for reading it rather than burning it down. Every
+       key above still means the same thing; decided rows stay on screen struck
+       through rather than vanishing</div>
+  <div><kbd>&larr;&darr;&uarr;&rarr;</kbd>or <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd
+       ><kbd>l</kbd> move the grid cursor · <kbd>&#8679;</kbd>+the same keys, or
+       shift-click, select a range · <kbd>space</kbd> picks one cell ·
+       <kbd>Esc</kbd> clears. With a selection, <kbd>a</kbd>/<kbd>d</kbd
+       >/<kbd>m</kbd> decide every row in it at once and <kbd>u</kbd> takes the
+       whole sweep back. <kbd>o</kbd> and <kbd>x</kbd> always act on the cursor
+       alone — one tab, and one company</div>
+  <div><kbd>dbl-click</kbd>open a job from the grid with the mouse.
+       <kbd>&#8984;</kbd>-click (<kbd>ctrl</kbd>-click on Windows) and
+       middle-click open it too, and leave the cursor where it is — so you can
+       hold a selection, look at three rows in it, and still decide the whole
+       sweep. A plain click still only moves the cursor</div>
+  <div><kbd>g</kbd>show/hide the lane rail — every key still works without it</div>
+  <div><kbd>drag</kbd>the rail's right edge widens it; double-click that edge fits
+       the longest lane name, or snaps back to the default</div>
+  <div><kbd>t</kbd>sort — fit / newest posted / oldest posted</div>
+  <div><kbd>/</kbd>filter the current lane · <kbd>Esc</kbd> clear</div>
+  </div><p style="margin-top:14px"><b>Fit</b> is the ranking every lane has
+  always used — employer boards before aggregators, proven-US before inferred,
+  strongest AI band first, and for the scored lanes their own score.
+  <b>Newest</b> and <b>Oldest</b> put the posting date in front of that, and
+  leave the rest of it deciding ties. Postings whose source never published a
+  date sort last under both, never first: blank means unknown, not old. The
+  choice sticks across lanes and reloads.</p>
+  <p style="margin-top:14px">Decisions survive every rebuild. Killed
+  companies are mirrored to <code>triage_blocklist.txt</code>.</p>
+  <button id="helpno">Close</button></dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+// Throws on a 500 and on {"error": ...} alike, same as apply.html.  Returning
+// the body unchecked was survivable while every request was a lane the menu
+// itself supplied; it stops being survivable the moment a stored value can be
+// rejected, because `d.cards` would come back undefined, fetchCards would read
+// it as an exhausted lane, and the page would say "nothing left" about a queue
+// with 170k rows in it.
+const api = (p, o) => fetch(p, o).then(r => {
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}).then(d => { if (d && d.error) throw new Error(d.error); return d; });
+
+// Values are the API's (lanes.SORTS); '' is 'fit', the ranking this page has
+// always had.  Newest/Oldest put the posting date in front of it.
+const SORT = [['', 'Fit'], ['new', 'Newest'], ['old', 'Oldest']];
+const SSTORE = 'triage.sort';
+
+function loadSort() {
+  // Validated against the options this build knows, exactly as apply.html
+  // validates its filters: a value left behind by an older build would be a
+  // rejected request on every fetch, for as long as the key sat there.
+  try {
+    const v = localStorage.getItem(SSTORE) || '';
+    if (SORT.some(([o]) => o === v)) return v;
+  } catch (e) { /* corrupt or storage off — start clean */ }
+  return '';
+}
+
+// Card or grid.  Stored and validated exactly like the sort, and for the same
+// reason: a value left behind by an older build would put the page into a mode
+// this one does not have, with nothing on screen to say why.
+const VIEWS = ['card', 'grid'];
+const VSTORE = 'triage.view';
+
+function loadView() {
+  try {
+    const v = localStorage.getItem(VSTORE) || 'card';
+    if (VIEWS.includes(v)) return v;
+  } catch (e) { /* corrupt or storage off — start clean */ }
+  return 'card';
+}
+
+const S = {
+  lane: 'ai12', lanes: [], groups: [], cards: [], i: 0, q: '', resume: null,
+  sort: loadSort(),          // '' | 'new' | 'old' — persisted, survives a reload
+  view: loadView(),          // 'card' | 'grid' — persisted the same way
+  // job_key -> the mark it was decided with, so a refetch can't repeat one AND
+  // the grid can draw the verdict.  One map rather than a Set beside a Map:
+  // two structures answering "is this row decided" is two that decide(), undo(),
+  // doKill() and fetchCards() all have to keep in step, and the first one to
+  // drift would show a struck-through cell you could decide again.
+  decided: new Map(),
+  // The grid selection and the cell a shift-range measures from, BY JOB_KEY.
+  // Never indices: doKill() filters rows out of S.cards mid-session, and an
+  // index captured before that points at a different job afterwards — the same
+  // rule apply.html states for its own undo stack.
+  sel: new Set(), anchor: null,
+  pending: [],               // not yet flushed to the server
+  undoStack: [],             // {job_key, lane, flushed}
+  // 'applied' is counted apart from 'approve' even though it IS one: the point
+  // of the key is that those rows never reach the /apply checklist, so a
+  // session tally that folded them in would say the queue grew by more than it
+  // did.  undo() decrements by trail entry, which carries the same four names.
+  trail: [], n: {approve: 0, deny: 0, maybe: 0, applied: 0},
+  loading: false, done: false,
+  // The scout lane ranks corpus.db in memory against these weights, sent with
+  // every fetch.  Kept client-side on purpose: a slider is then one
+  // self-contained request with nothing to persist before you can see what it
+  // did, and two tabs cannot fight over the active profile.
+  scout: {profile: null, schema: null, name: 'default', explore: 0.15,
+          open: false},
+};
+const SCOUT = 'scout';
+let flushTimer = null;
+
+/* ---------------------------------------------------------------- rendering */
+const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g,
+  c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+function money(c) {
+  const f = v => {
+    const n = parseFloat(v); if (!isFinite(n) || n <= 0) return null;
+    return n >= 1000 ? '$' + Math.round(n / 1000) + 'k' : '$' + Math.round(n);
+  };
+  const a = f(c.salary_min), b = f(c.salary_max);
+  if (!a && !b) return null;
+  const r = a && b ? (a === b ? a : a + '–' + b) : (a || b);
+  const p = (c.salary_period || '').toLowerCase();
+  return r + (p && p !== 'year' && p !== 'yearly' ? ' /' + p : '');
+}
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 1600);
+}
+
+function renderSort() {
+  $('#sortbar').innerHTML = '<span class="fl">Sort</span>' + SORT.map(
+    ([v, text]) => `<button data-v="${v}" class="${
+      S.sort === v ? 'on' : ''}">${text}</button>`).join('');
+  $('#sortbar').querySelectorAll('button').forEach(b =>
+    b.onclick = () => setSort(b.dataset.v));
+}
+
+function renderView() {
+  $('#viewbar').innerHTML = '<span class="fl">View</span>' + VIEWS.map(
+    v => `<button data-v="${v}" class="${S.view === v ? 'on' : ''}">${
+      v === 'card' ? 'Card' : 'Grid'}</button>`).join('');
+  $('#viewbar').querySelectorAll('button').forEach(b =>
+    b.onclick = () => { b.blur(); setView(b.dataset.v); });
+  // The legend button says where `v` goes, not where you are.
+  const vl = $('#vlabel');
+  if (vl) vl.textContent = S.view === 'grid' ? 'card' : 'grid';
+}
+
+// Digits reach the first ten lanes only — 1-9 then 0 — because there are twenty and a
+// keyboard has ten number keys.  Everything past the tenth is reached with [ and ], which
+// step through ALL of them in order, and by clicking the rail, which shows every one.  The
+// row for an unbound lane leaves the <kbd> slot blank rather than printing a key that does
+// nothing — blank, not absent, so the labels of a group stay in one column.
+const LANE_KEYS = ['1','2','3','4','5','6','7','8','9','0'];
+
+// Group rollups and the big lane counts (183,353) get short forms; anything
+// under 10k stays exact, because in a lane you are burning down the difference
+// between 275 and 240 is the thing you are watching.
+function short(n) {
+  return n >= 10000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1)
+                        .replace(/\.0$/, '') + 'k'
+                    : n.toLocaleString();
+}
+
+function renderLanes() {
+  // Grouped in the order the server sent (lanes.GROUPS), and inside a group in
+  // the order lanes() returns — which is the order the digit keys count in, so
+  // the number beside a lane in the rail is the key that reaches it.
+  //
+  // A lane whose group this build doesn't know still gets drawn, under its own
+  // raw group name at the end: a lane added server-side must never become
+  // invisible here, which is the failure the old flat bar had in a subtler form.
+  const seen = new Set(S.groups.map(g => g.key));
+  const groups = S.groups.concat(
+    [...new Set(S.lanes.map(l => l.group).filter(g => !seen.has(g)))]
+      .map(k => ({key: k, label: k})));
+  const rail = [];
+  groups.forEach(g => {
+    const mine = S.lanes.filter(l => (l.group || 'corpus') === g.key);
+    if (!mine.length) return;
+    const tot = mine.reduce((a, l) => a + l.remaining, 0);
+    rail.push(`<div class="grp">${esc(g.label)}<b>${short(tot)}</b></div>`);
+    mine.forEach(l => {
+      const k = S.lanes.indexOf(l);
+      rail.push(`<button data-lane="${esc(l.key)}" title="${esc(l.label)}"
+        class="${l.key === S.lane ? 'on' : ''}${l.remaining ? '' : ' zero'}"
+        ><kbd>${k < LANE_KEYS.length ? LANE_KEYS[k] : ''}</kbd
+        ><span class="lbl">${esc(l.label)}</span
+        ><span class="n">${short(l.remaining)}</span></button>`);
+    });
+  });
+  $('#rail').innerHTML = rail.join('');
+  $('#rail').querySelectorAll('button').forEach(b =>
+    b.onclick = () => pick(b.dataset.lane));
+  const t = S.n.approve + S.n.deny + S.n.maybe + S.n.applied;
+  $('#stats').textContent = t
+    ? `${t} this session · ${S.n.approve} yes / ${S.n.deny} no / ${S.n.maybe} maybe`
+      + (S.n.applied ? ` / ${S.n.applied} applied` : '')
+    : '';
+}
+
+// The rail scrolls once there are more lanes than fit, so a lane reached with
+// [ or ] has to be brought into view — otherwise the one control that reaches
+// the lanes past the tenth is also the one that leaves you unable to see which
+// lane you are in.  'nearest' so an already-visible lane doesn't jump the list.
+function showLane() {
+  const b = $(`#rail button[data-lane="${S.lane}"]`);
+  if (b) b.scrollIntoView({block: 'nearest'});
+}
+
+const MARK = {approve: '✓', applied: '✓✓', deny: '✗', maybe: '~'};
+// Mirrors date_basis.LABEL. A row is pilled only when date_weak=1, so the
+// 'employer' case never renders and is not listed here.
+const DATE_BASIS_LABEL = {
+  network:    'getro ingest date',
+  aggregator: 'aggregator listing date',
+  first_seen: 'first-seen date, not posted',
+};
+
+function renderTrail() {
+  $('#trail').innerHTML = S.trail.slice(-4).reverse().map(x =>
+    `<span>${MARK[x.v] || '~'} ${esc(x.t)}</span>`
+  ).join('');
+}
+
+// Whether this row has a score worth showing at all.  Shared by the pills and
+// by the card's `why` row so the two can never disagree about it.
+const isScored = c => c.feed === 'contract' || +c.rank_score > 0
+                      || S.lane === SCOUT;
+
+// Every pill a row can wear, in one place, because the card draws all of them
+// and a grid cell has room for four.  The third element is a stable key, so the
+// grid picks its subset BY NAME: a pill added here reaches the card at once and
+// stays out of the grid until someone decides it earns the width — rather than
+// one renderer quietly growing a pill the other never got, which is the failure
+// the lane-name ternary that used to live here had.
+// Text is left unescaped: the join escapes, and a second pass would turn an
+// ampersand in a company name into &amp;amp;.
+function pillsFor(c) {
+  const sal = money(c), pills = [];
+  // FIRST, always, so it lands in the same place on every card and survives the
+  // grid's slice.  `ref` is 0 for a row minted before this existed or one that
+  // is in corpus.db but not triage.db; those draw no badge rather than 'J0'.
+  if (+c.ref) pills.push(['J' + c.ref, 'ref', 'ref']);
+  // Contract rows lead with the score that ordered THIS lane — the fast-money
+  // lane ranks on money_score, so showing the fit blend there would explain a
+  // position the row does not hold.  A row can sit in both lanes.
+  const contract = c.feed === 'contract';
+  const cash = c.lane === 'fastmoney';
+  // `rank_score`/`rank_why` are resolved server-side from lanes.LANE_SCORE — the
+  // pair that actually ordered THIS lane, whichever column it lives in.  Do not
+  // reintroduce a lane name on this side; add the column pair to LANE_SCORE.
+  const shown = +c.rank_score;
+  const scored = isScored(c);
+  if (scored && shown) pills.push([(cash ? 'fast ' : 'score ')
+                                   + Math.round(shown),
+                                   shown >= 60 ? 'ok' : 'info', 'score']);
+  if (contract && cash && (c.lane_tags || '').includes(',contract,'))
+    pills.push(['also in Contract', 'dim', 'also']);
+  if (c.ai_band) pills.push([c.ai_band, +c.ai_band[0] <= 2 ? 'ok' : 'info',
+                             'band']);
+  if (c.startup_tier) pills.push(['startup ' + c.startup_tier, 'info',
+                                  'startup']);
+  if (c.bucket === 'MA local') pills.push(['MA', 'warn', 'bucket']);
+  if (c.bucket === 'South FL') pills.push(['South FL', 'warn', 'bucket']);
+  if (sal) pills.push([sal, 'ok', 'sal']);
+  if (c.work_mode) pills.push([c.work_mode, 'dim', 'mode']);
+  if (c.employment_type) pills.push([c.employment_type, 'dim', 'etype']);
+  pills.push([c.source + (+c.is_agg ? ' (aggregator)' : ''),
+              +c.is_agg ? 'bad' : 'dim', 'src']);
+  // Where `posted` came from. Only shown when it is NOT the employer's own
+  // date: 57% of the rows stamped 2026-08-18 were ingested that day rather
+  // than posted that day, and those are the ones that open as expired.
+  // himalayas earns its own warning -- it 403s every liveness probe we make,
+  // so nothing short of clicking it can tell you whether it is still open.
+  if (+c.date_weak) pills.push([DATE_BASIS_LABEL[c.date_basis] || c.date_basis,
+                                'warn', 'weak']);
+  if (c.source === 'himalayas') pills.push(['liveness unverifiable', 'bad',
+                                            'live']);
+  // Scout extras.  `explore` is marked so a card that is deliberately NOT the
+  // top-ranked one reads as intentional rather than as the ranking misfiring;
+  // `coverage` says how much of the bonus half of the score this row even had
+  // the data to earn, which is the whole reason the bonus axes are capped.
+  if (c.explore) pills.push(['explore', 'exp', 'exp']);
+  if (c.coverage != null && S.lane === SCOUT)
+    pills.push(['evidence ' + c.coverage + '%',
+                c.coverage >= 67 ? 'ok' : c.coverage >= 34 ? 'info' : 'warn',
+                'cov']);
+  if (c.family && S.lane === SCOUT) pills.push([c.family, 'dim', 'fam']);
+  if (c.dup_rank > 0) pills.push(['copy #' + (+c.dup_rank + 1), 'dim', 'dup']);
+  return pills;
+}
+
+// The same words in both views, so an exhausted lane reads the same whichever
+// one you are standing in.
+function emptyHTML() {
+  const lane = S.lanes.find(l => l.key === S.lane);
+  return S.loading
+    ? `<div class="empty">loading…</div>`
+    : `<div class="empty"><b>${S.q ? 'Nothing matches that filter.'
+        : 'Lane clear.'}</b>${S.q ? 'Press <kbd>Esc</kbd> to clear the filter.'
+        : `Nothing left in ${esc(lane ? lane.label : S.lane)}. Pick another
+           lane from the rail, or run
+           <code>python3 triage_export.py</code>.`}</div>`;
+}
+
+// One entry point for both views, so every existing render() call site — and
+// there are a dozen — keeps working without knowing which one is on screen.
+function render(rebuild) {
+  if (S.view === 'grid') renderGrid(rebuild);
+  else renderCard();
+}
+
+function renderCard() {
+  const c = S.cards[S.i];
+  if (!c) { $('#card').innerHTML = emptyHTML(); return; }
+  const pills = pillsFor(c);
+  const scored = isScored(c), why = c.rank_why;
+
+  const meta = [];
+  const add = (k, v) => { if (v) meta.push(`<dt>${k}</dt><dd>${esc(v)}</dd>`); };
+  // `~` on the date itself, so it reads as approximate in the list without
+  // having to find the pill.
+  add('posted', c.posted ? (+c.date_weak ? '~' + c.posted : c.posted) : '');
+  // On scout the `why` is the live decomposition of the score under the
+  // weights currently on the sliders, so it moves when they do.  Everywhere
+  // else it is the string the builder stored.
+  if (S.lane === SCOUT && Array.isArray(c.why) && c.why.length)
+    meta.push('<dt>why</dt><dd class="whychips">' + c.why.slice(0, 10).map(
+      ([k, v]) => `<i class="${v < 0 ? 'neg' : 'pos'}">${esc(k)} ${
+        v > 0 ? '+' : ''}${v}</i>`).join('') + '</dd>');
+  else add('why', scored ? why : '');
+  add('skills', c.skills);
+  add('evidence', c.startup_evidence);
+  add('company', [c.company_stage, c.company_size, c.company_industry]
+      .filter(Boolean).join(' · '));
+  add('seniority', c.seniority);
+  const url = c.apply_url || c.job_url;
+  if (url) meta.push(`<dt>apply</dt><dd><a href="${esc(url)}" target="_blank"
+    rel="noopener">${esc(url.slice(0, 78))}</a></dd>`);
+
+  // Which resume to send, straight off the lane.  The whole point of splitting the main
+  // feed into twelve scored lanes is that each one answers "and what do I send them" —
+  // a lane that tells you a job is worth applying to and leaves you to guess the document
+  // has done half the job.  S.resume comes from the /api/cards payload (lanes.LANE_RESUME).
+  const r = S.resume;
+  const send = r
+    ? `<div class="send"><b>Send:</b> ${esc(r.code)} · ${esc(r.name)}
+         <span class="sendfiles">${esc(r.pdf.split('/').pop())}${
+           r.draft ? ' · ' + esc(r.draft.split('/').pop()) + ' (2p)' : ''}</span></div>`
+    : '';
+
+  $('#card').innerHTML = `
+    <div class="title">${esc(c.title)}</div>
+    <div class="co">${esc(c.company) || '<span style="color:var(--mut)">(no company)</span>'}</div>
+    <div class="loc">${esc(c.location) || '—'}</div>
+    ${send}
+    <div class="pills">${pills.map(([t, k]) =>
+      `<span class="pill ${k}">${esc(t)}</span>`).join('')}</div>
+    <dl class="meta">${meta.join('')}</dl>`;
+}
+
+/* -------------------------------------------------------------- the grid */
+// Which pills survive the trip into a 255px cell.  Anything not named here is
+// card-only; `src` is the exception, and only in its aggregator form, because
+// "this row came from a republisher" changes whether the link will even open
+// and the name of a direct board does not earn the width.
+const GRID_PILLS = new Set(['ref', 'score', 'band', 'startup', 'bucket', 'sal',
+                            'weak']);
+// 5 rather than 4 since `ref` joined the set: at 4 the ref pushed whichever pill
+// fell fifth out of the cell, and that is `weak` (the warning that a row will
+// open expired) or `sal` on exactly the rows you least want it dropped from.
+// Safe because .gcell rows are grid-auto-rows:max-content -- a wrapped pill row
+// grows the cell instead of clipping it (see the comment at the top).
+const GRID_MAX_PILLS = 5;
+
+function cellHTML(c, i) {
+  const mk = S.decided.get(c.job_key);
+  // The card carries `posted` in its meta list; a cell has no meta list, and
+  // freshness is most of what you are scanning a lane FOR.  Blank is spelled
+  // out rather than left empty: ~2.6k live rows have no date because their
+  // source never published one, and blank means unknown, not old — an empty
+  // slot would read as the latter.
+  const dtxt = c.posted ? (+c.date_weak ? '~' : '') + c.posted : 'undated';
+  const dcls = c.posted ? (+c.date_weak ? 'weak' : '') : 'undated';
+  const pills = pillsFor(c).filter(([, , k]) =>
+      GRID_PILLS.has(k) || (k === 'src' && +c.is_agg)).slice(0, GRID_MAX_PILLS);
+  return `<div class="gcell${mk ? ' done v-' + mk : ''}${
+      S.sel.has(c.job_key) ? ' sel' : ''}${i === S.i ? ' cur' : ''}" data-i="${i
+      }" title="${esc(c.title)} — ${esc(c.company)}"
+    ><div class="gmark">${MARK[mk] || ''}</div
+    ><div class="gtitle">${esc(c.title)}</div
+    ><div class="gco">${esc(c.company) || '—'}</div
+    ><div class="gline"><span class="gloc">${esc(c.location) || '—'}</span
+      ><span class="gdate ${dcls}">${esc(dtxt)}</span></div
+    ><div class="pills">${pills.map(([t, k]) =>
+        `<span class="pill ${k}">${esc(t)}</span>`).join('')}</div></div>`;
+}
+
+// Built once, then patched — never rebuilt on a decision.  `innerHTML =` on the
+// scroller resets scrollTop, so a full rebuild per keystroke would throw the
+// grid back to the top of the lane every time you decided anything, and at a
+// few hundred retained cells it would be the slowest thing on the page.
+// Appending only what arrived is what makes a background top-up invisible.
+function renderGrid(rebuild) {
+  const el = $('#grid');
+  if (!S.cards.length) { el.innerHTML = emptyHTML(); return renderGbar(); }
+  const cells = el.querySelectorAll('.gcell').length;
+  if (rebuild || !cells || cells > S.cards.length) {
+    el.innerHTML = S.cards.map(cellHTML).join('');
+  } else if (cells < S.cards.length) {
+    el.insertAdjacentHTML('beforeend', S.cards.slice(cells).map(
+      (c, n) => cellHTML(c, cells + n)).join(''));
+  }
+  paintGrid();
+}
+
+// Classes and one glyph, on cells that already exist.  The scroll position has
+// to survive a cursor move, which is the same reason apply.html splits paint()
+// out of render().
+function paintGrid() {
+  const el = $('#grid');
+  el.querySelectorAll('.gcell').forEach(n => {
+    const i = +n.dataset.i, c = S.cards[i];
+    if (!c) return;
+    const mk = S.decided.get(c.job_key);
+    n.classList.remove('v-approve', 'v-applied', 'v-deny', 'v-maybe');
+    if (mk) n.classList.add('v-' + mk);
+    n.classList.toggle('done', !!mk);
+    n.classList.toggle('sel', S.sel.has(c.job_key));
+    n.classList.toggle('cur', i === S.i);
+    const m = n.querySelector('.gmark');
+    if (m) m.textContent = MARK[mk] || '';
+  });
+  const cur = el.querySelector('.gcell.cur');
+  if (cur) cur.scrollIntoView({block: 'nearest'});
+  renderGbar();
+}
+
+// The one line that says what a decision key is about to do.  The trail holds
+// four entries and a sweep of twenty is one of them, so without this there is
+// nothing on screen between selecting a range and it being decided.
+function renderGbar() {
+  const n = S.sel.size, und = undecidedHeld();
+  $('#gbar').innerHTML = n
+    ? `<b>${n} selected</b> — <kbd>a</kbd> <kbd>d</kbd> <kbd>m</kbd> decide all
+       ${n} at once · <kbd>Esc</kbd> clears · <kbd>o</kbd> and <kbd>x</kbd>
+       still act on the cursor alone`
+    : (S.done && !und && S.cards.length
+        ? `<b>Lane clear.</b> Every row loaded here is decided.`
+        : `${S.cards.length.toLocaleString()} loaded · ${
+            und.toLocaleString()} undecided${S.done ? ' · end of lane' : ''}`);
+}
+
+const undecidedHeld = () =>
+  S.cards.reduce((a, c) => a + (S.decided.has(c.job_key) ? 0 : 1), 0);
+
+// Counted off the rendered rows rather than parsed out of
+// grid-template-columns: the computed value of an auto-fill track list is the
+// specified string while the grid is display:none, and any min()/clamp() added
+// to it later would contain spaces of its own.  offsetTop is what auto-fill
+// actually did at this width, including with the scout panel open.
+function gridCols() {
+  const cells = $('#grid').querySelectorAll('.gcell');
+  if (!cells.length) return 1;
+  const top = cells[0].offsetTop;
+  let n = 0;
+  for (const c of cells) { if (c.offsetTop !== top) break; n++; }
+  return Math.max(1, n);
+}
+
+// Indices are resolved from keys at the moment of use and never stored.
+function selIndices() {
+  if (!S.sel.size) return [];
+  const out = [];
+  S.cards.forEach((c, i) => { if (S.sel.has(c.job_key)) out.push(i); });
+  return out;
+}
+
+function clearSel() { S.sel.clear(); S.anchor = null; }
+
+// A shift gesture REPLACES the selection with the range from the anchor, so
+// shift-left after three shift-rights shrinks it back instead of leaving the
+// cells behind, and the selection is always something whose two ends you can
+// see.  space is the additive gesture.
+function setRange(anchorKey, toIdx) {
+  const a = S.cards.findIndex(c => c.job_key === anchorKey);
+  if (a < 0) { S.anchor = null; return; }
+  const lo = Math.min(a, toIdx), hi = Math.max(a, toIdx);
+  S.sel = new Set(S.cards.slice(lo, hi + 1).map(c => c.job_key));
+}
+
+function moveCur(d, extend) {
+  if (!S.cards.length) return;
+  const was = S.i;
+  S.i = Math.max(0, Math.min(S.cards.length - 1, S.i + d));
+  if (extend) {
+    if (S.anchor == null) S.anchor = S.cards[was].job_key;
+    setRange(S.anchor, S.i);
+  }
+  paintGrid();
+  topUp();
+}
+
+// Card mode must never be handed a row that is already decided: `a` on one
+// would flip a verdict rather than make one, and the tallies would count it
+// twice.  Used on every advance and when leaving the grid.
+function skipDecided() {
+  while (S.cards[S.i] && S.decided.has(S.cards[S.i].job_key)) S.i++;
+}
+
+function setView(v) {
+  if (v === S.view || !VIEWS.includes(v)) return;
+  S.view = v;
+  try { localStorage.setItem(VSTORE, v); } catch (e) {}
+  document.body.classList.toggle('gridview', v === 'grid');
+  clearSel();
+  if (v === 'card') skipDecided();
+  renderView();
+  render(true);
+  topUp();
+}
+
+/* ------------------------------------------------------------------- data */
+async function loadLanes() {
+  const d = await api('/api/lanes');
+  S.lanes = d.lanes; S.groups = d.groups || []; renderLanes();
+}
+
+let gen = 0;                 // bumped on every lane/filter change
+// One card at a time needs a short queue; a grid shows two dozen at once and
+// is scrolled rather than consumed, so it holds more of the lane at a time.
+const CARD_N = 60, GRID_N = 120;
+
+async function fetchCards(reset) {
+  // A background top-up must never swallow a lane switch, and a slow reply for
+  // the lane you just left must never land on top of the one you're in now —
+  // both would leave you triaging a queue you aren't looking at. Resets always
+  // proceed and every response is checked against the generation that asked.
+  if (S.loading && !reset) return;
+  const my = reset ? ++gen : gen;
+  S.loading = true;
+  if (reset) { S.cards = []; S.i = 0; S.done = false; clearSel(); render(true); }
+  // Read off the view rather than passed in, so the boot fetch and every
+  // top-up agree with whichever mode is actually on screen.
+  const n = S.view === 'grid' ? GRID_N : CARD_N;
+  // How many rows we hold that the SERVER still counts as undecided — NOT a
+  // page number.  A row we decided has left its UNDECIDED predicate on its own,
+  // so counting that one would skip a real row; a decision still sitting in
+  // S.pending has not left it, so that one counts.  What remains is the
+  // in-flight window (spliced out of S.pending, not yet committed), and it errs
+  // the safe way: too small an offset re-sends rows we already hold and the
+  // dedupe below drops them, where too large a one would skip rows for good.
+  // That is also why `done` is tested on the RAW count and not on `fresh`.
+  const pend = new Set(S.pending.map(x => x.job_key));
+  const off = S.cards.reduce((a, c) => a
+      + (!S.decided.has(c.job_key) || pend.has(c.job_key) ? 1 : 0), 0);
+  const u = `/api/cards?lane=${encodeURIComponent(S.lane)}&n=${n}`
+          + (off ? `&offset=${off}` : '')
+          + (S.q ? `&q=${encodeURIComponent(S.q)}` : '')
+          + (S.sort ? `&sort=${encodeURIComponent(S.sort)}` : '');
+  let d;
+  try {
+    // The scout lane is a POST because the whole weight profile travels with
+    // the request; every other lane is a predicate the server already knows.
+    d = S.lane === SCOUT
+      ? await api('/api/scout/cards', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({profile: S.scout.profile, q: S.q, n: n,
+                                explore: S.scout.explore, reset: !!reset})})
+      : await api(u);
+    if (d && d.error) throw new Error(d.error);
+  } catch (e) {
+    // A rejected sort or a 500 lands here rather than passing for an empty
+    // lane.  S.loading has to be cleared by hand: without it the next top-up
+    // would be refused and the queue would stay stuck behind one bad fetch.
+    if (my !== gen) return;
+    S.loading = false; render();
+    return toast(e.message || 'load failed');
+  }
+  if (my !== gen) return;                       // superseded — drop it
+  // Set alongside the cards, not in pick(): a background top-up for the lane you are
+  // already in must not blank the send line, and a reply for a lane you have left is
+  // dropped by the `my !== gen` guard above before it can install the wrong resume.
+  S.resume = d.resume || null;
+  // The server can't know about decisions still sitting in S.pending, so drop
+  // anything already judged locally rather than showing it twice.  A Set of the
+  // keys we hold, because with the buffer retained this is now thousands x n.
+  const got = (d.cards || []).length;
+  const held = new Set(S.cards.map(c => c.job_key));
+  const fresh = (d.cards || []).filter(c => !S.decided.has(c.job_key)
+                                         && !held.has(c.job_key));
+  // Scout is a server-side cursor, not an offset: it never re-serves a row, and
+  // a SHORT BATCH IS NORMAL there — the explore half bails early on its
+  // per-company and per-family caps.  `got < n` would declare a 500k-row corpus
+  // exhausted on the second fetch, so scout keeps the all-duplicates test and
+  // every other lane gets the one that survives paging without deciding.
+  if (S.lane === SCOUT ? !fresh.length : got < n) S.done = true;
+  // No slice.  Dropping everything behind the cursor is what made a scroll-back
+  // view impossible — and what let a top-up landing while the kill dialog was
+  // open reset S.i to 0, so the confirmed kill hit a company the dialog had not
+  // named.  The buffer is bounded by trimCards() instead.
+  S.cards = S.cards.concat(fresh);
+  trimCards();
+  S.loading = false;
+  render();
+}
+
+// Card mode walks forward and never looks back, so without the old slice its
+// buffer would grow for the length of a session.  Trimmed well behind the
+// cursor and only there: the grid's whole point is the rows behind you, and
+// undo carries its own copy of the card for anything that has left.
+const TRIM_AT = 600, TRIM_KEEP = 200;
+function trimCards() {
+  if (S.view !== 'card' || S.i < TRIM_AT) return;
+  const cut = S.i - TRIM_KEEP;
+  S.cards.splice(0, cut);
+  S.i -= cut;
+}
+
+// "Undecided rows still in the buffer".  In card mode that is identical to the
+// old `S.cards.length - S.i`, since everything behind the cursor there is
+// decided — so card behaviour is unchanged.  In grid mode it is the only
+// version that works: the cursor is not the frontier, arrowing back up to
+// re-read a row must not start a fetch, and two hundred retained
+// struck-through cells must not read as a full buffer.
+function topUp() {
+  if (S.done || S.loading) return;
+  if (undecidedHeld() < (S.view === 'grid' ? 48 : 15)) fetchCards(false);
+}
+
+function flush(now) {
+  clearTimeout(flushTimer);
+  const go = () => {
+    if (!S.pending.length) return Promise.resolve();
+    const batch = S.pending.splice(0, S.pending.length);
+    batch.forEach(b => { const u = S.undoStack.find(x => x.job_key === b.job_key);
+                         if (u) u.flushed = true; });
+    // keepalive, as on apply.html: a batch that has already left S.pending
+    // still completes if the tab navigates mid-request, and beforeunload
+    // cannot rescue that one — it only knows about what is still pending.
+    return api('/api/decide', {method: 'POST', keepalive: true,
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({decisions: batch})}).then(r => {
+        // A sweep makes a silent partial loss twenty rows instead of one, so
+        // the server's own count of what it could not find is shown.
+        if (r && r.missing && r.missing.length)
+          toast(`${r.missing.length} not saved — not in this corpus`);
+      }).catch(() => {
+        S.pending.unshift(...batch);           // keep them for the next flush
+        toast('save failed — will retry');
+      });
+  };
+  if (now || S.pending.length >= 10) return go();
+  flushTimer = setTimeout(go, 400);
+  return Promise.resolve();
+}
+
+/* ---------------------------------------------------------------- actions */
+let batchId = 0;
+
+// One row.  `status` is the optional apply-queue state the same keystroke
+// records — only 'applied' is bound (shift-A), for a job you have just sent
+// off.  It travels in the SAME pending item as the verdict rather than as a
+// second request, so it inherits the batching, the retry and the unload beacon
+// that already make a decision impossible to lose; splitting it would open a
+// window where the tab dies having approved a job it also claimed you applied
+// to.  Returns whether it actually decided anything.
+function decideAt(idx, verdict, status, batch) {
+  const c = S.cards[idx];
+  // The grid cursor can sit on a row that is already struck through, and a
+  // sweep can cover one.  Without this guard the second press queues a second
+  // pending item (the server's ON CONFLICT would quietly overwrite the
+  // verdict — a denied job becoming approved), counts the row twice in the
+  // session tally, drains the rail count twice, and needs two undos.
+  if (!c || S.decided.has(c.job_key)) return false;
+  const mark = status === 'applied' ? 'applied' : verdict;
+  S.decided.set(c.job_key, mark);
+  const p = {job_key: c.job_key, verdict, lane: S.lane};
+  // Scout cards come from corpus.db, which `jobs` has never heard of, so they
+  // carry their own ct_key — without it the server's INSERT ... SELECT FROM
+  // jobs matches nothing and the decision silently does not happen.  Read off
+  // THIS card and never off the cursor: a sweep decides rows it is not on.
+  if (S.lane === SCOUT && c.ct_key) p.ct_key = c.ct_key;
+  if (status) p.status = status;
+  S.pending.push(p);
+  S.undoStack.push({job_key: c.job_key, card: c, flushed: false,
+                    work: !!status, batch});
+  S.n[mark]++;
+  return true;
+}
+
+// The cursor's row, or every row in the grid selection, as ONE batch: one trail
+// entry, one undo, and one /api/decide request — that endpoint has always taken
+// a list, so a sweep of twenty needs no new endpoint and inherits the same
+// retry and unload beacon a single decision has.
+function decide(verdict, status) {
+  const sel = S.view === 'grid' ? selIndices() : [];
+  const idxs = sel.length ? sel : [S.i];
+  const batch = ++batchId;
+  let n = 0, first = null;
+  idxs.forEach(i => {
+    if (decideAt(i, verdict, status, batch)) {
+      n++; if (!first) first = S.cards[i];
+    }
+  });
+  if (!n) return;
+  const mark = status === 'applied' ? 'applied' : verdict;
+  // One entry for the sweep.  The trail shows four, so twenty entries would
+  // flush it on a single keystroke and tell you nothing about any of them.
+  S.trail.push({v: mark, n,
+                t: n > 1 ? `${n} jobs` : `${first.title} — ${first.company}`});
+  const lane = S.lanes.find(l => l.key === S.lane);
+  if (lane) lane.remaining = Math.max(0, lane.remaining - n);
+  clearSel();
+  S.i++;                                        // advance before any network
+  skipDecided();
+  // Card mode lets the cursor run off the end — that IS its empty state.  The
+  // grid's cursor has to stay on a cell.
+  if (S.view === 'grid') S.i = Math.min(S.i, Math.max(0, S.cards.length - 1));
+  render(); renderTrail(); renderLanes(); flush(); topUp();
+  // The one action here with a consequence you cannot see on this page — the
+  // row goes straight to the Applied tab and never appears in 'to apply' — so
+  // it says so.  a/d/m are self-evident from the trail.
+  if (status === 'applied')
+    toast(n > 1 ? `applied · ${n} jobs`
+                : `applied · ${first.company || first.title}`);
+}
+
+async function undo() {
+  const last = S.undoStack[S.undoStack.length - 1];
+  if (!last) return toast('nothing to undo');
+  // A kill pushes {unblock} and no job_key. Falling through to the row-level
+  // path below would POST an undefined job_key (deleting nothing, so the
+  // company stays blocked) and splice an undefined card into the deck.
+  if (last.unblock) {
+    S.undoStack.pop();
+    const d = await api('/api/undo', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({unblock: last.unblock})});
+    S.trail.pop();
+    await loadLanes(); await fetchCards(true); renderTrail();
+    return toast(`unblocked ${last.company} — `
+                 + `${(d.restored || 0).toLocaleString()} rows back`);
+  }
+  // The whole sweep, not one cell of it: a bulk decision was one keystroke,
+  // one trail entry and one thing you meant, so it is one undo.
+  const group = [];
+  while (S.undoStack.length) {
+    const e = S.undoStack[S.undoStack.length - 1];
+    if (e.unblock || e.batch !== last.batch) break;
+    group.push(S.undoStack.pop());
+  }
+  const posts = [];
+  group.forEach(e => {
+    S.decided.delete(e.job_key);
+    const p = S.pending.findIndex(x => x.job_key === e.job_key);
+    if (p >= 0) S.pending.splice(p, 1);         // never reached the server
+    // drop_work only for a shift-A: it clears the `applications` row that
+    // keystroke wrote.  Sent unconditionally it would let a plain undo of a
+    // plain approve wipe a status you had set over on /apply.
+    else posts.push(api('/api/undo', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({job_key: e.job_key, drop_work: !!e.work})}));
+  });
+  // Concurrent, not a serialised loop: taking back a sweep of twenty would
+  // otherwise be twenty round trips end to end.
+  if (posts.length) await Promise.all(posts);
+  const t = S.trail.pop();
+  if (t) S.n[t.v] = Math.max(0, S.n[t.v] - (t.n || 1));
+  // The cards are still in the buffer at their own indices — nothing was
+  // sliced away — so the cursor goes back to the first row of the sweep BY KEY.
+  // Finding it by key rather than by the index it was decided at is what makes
+  // this survive doKill's filter; the splice is the fallback for a card that
+  // has left the buffer entirely, which is a lane change or that same filter.
+  let back = -1;
+  group.forEach(e => {
+    let at = S.cards.findIndex(x => x.job_key === e.job_key);
+    if (at < 0) {
+      at = Math.min(S.i, S.cards.length);
+      S.cards.splice(at, 0, e.card);
+    }
+    back = back < 0 ? at : Math.min(back, at);
+  });
+  if (back >= 0) S.i = back;
+  const lane = S.lanes.find(l => l.key === S.lane);
+  if (lane) lane.remaining += group.length;
+  render(true); renderTrail(); renderLanes();
+  toast(group.length > 1 ? `undone — ${group.length} back` : 'undone');
+}
+
+async function killCompany() {
+  const c = S.cards[S.i];
+  if (!c) return;
+  if (!c.company_norm) return toast('blank company — cannot kill as a group');
+  flush(true);
+  const info = await api('/api/company?norm=' + encodeURIComponent(c.company_norm));
+  $('#killh').textContent = `Kill ${info.company || c.company}?`;
+  $('#killp').innerHTML = `Denies <b>${info.undecided.toLocaleString()}</b>
+    undecided rows now (${info.total.toLocaleString()} total in the corpus)
+    and every row they post from here on. Reversible: delete the line from
+    <code>triage_blocklist.txt</code>, or press <kbd>u</kbd>.`;
+  $('#killdlg').showModal();
+  $('#killdlg').returnValue = '';
+}
+
+async function doKill(norm) {
+  // No d.error check: api() throws on one now, and the rejection handler at the
+  // bottom of this file toasts it — a blank-company kill still says so.
+  const d = await api('/api/kill-company', {method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({company_norm: norm})});
+  // Hold the cursor BY KEY across the filter.  It takes the company's rows out
+  // of the whole buffer, including from behind the cursor, so the old
+  // Math.min clamp left S.i pointing at a different job than it had been on —
+  // which in the grid is the entire page reflowing under a stationary cursor.
+  const at = S.cards[S.i], key = at && at.job_key;
+  S.cards = S.cards.filter(x => x.company_norm !== norm);
+  S.undoStack.push({unblock: norm, company: d.company});
+  S.trail.push({v: 'deny', t: `killed ${d.company} (${d.killed})`});
+  const back = key ? S.cards.findIndex(x => x.job_key === key) : -1;
+  S.i = back >= 0 ? back : Math.min(S.i, S.cards.length);
+  clearSel();          // some of what was selected just left with the company
+  toast(`killed ${d.company} — ${d.killed.toLocaleString()} denied`);
+  await loadLanes(); render(true); renderTrail(); topUp();
+}
+
+function pick(lane) {
+  if (lane === S.lane) return;
+  S.lane = lane; S.q = ''; $('#q').value = ''; $('#filter').style.display = 'none';
+  // In every other lane the box is a substring filter over title/company; in
+  // scout it is an FTS5 query that BOOSTS rather than excludes, so the
+  // placeholder has to say so or the empty-lane message reads as a bug.
+  $('#q').placeholder = lane === SCOUT
+    ? 'search the whole corpus — boosts matches, does not hide the rest'
+    : 'filter this lane by title or company — Enter to apply, Esc to clear';
+  if (lane === SCOUT) { ensureScout(); $('#tune').classList.toggle('on', S.scout.open); }
+  else $('#tune').classList.remove('on');
+  document.body.classList.toggle('tuneon', lane === SCOUT && S.scout.open);
+  flush(true); renderLanes(); showLane(); fetchCards(true);
+}
+
+// The rail is the whole lane menu, so hiding it is only ever a "give the card
+// the width" move — every binding still works with it off, which is why this is
+// a toggle and not a mode.  Persisted like the sort, and validated the same
+// way: anything but the one string that means off is read as on.
+const RSTORE = 'triage.rail';
+
+function setRail(off) {
+  document.body.classList.toggle('railoff', off);
+  $('#railtog').setAttribute('aria-expanded', String(!off));
+  try { localStorage.setItem(RSTORE, off ? 'off' : 'on'); } catch (e) {}
+  if (!off) showLane();
+}
+
+// How wide the rail is, dragged from its border and remembered like the toggle.
+// 232px fits about 22 characters and the longest lane name is 37, so every
+// long one ellipsized and the only
+// way to read it was to hover for the tooltip.  The floor keeps the counts and
+// the key hints readable; the ceiling stops a drag from eating the card, which
+// caps at 760px anyway.
+const WSTORE = 'triage.railw', RAIL_DEF = 232, RAIL_MIN = 150, RAIL_MAX = 560;
+
+function setRailW(px) {
+  const w = Math.max(RAIL_MIN, Math.min(RAIL_MAX, Math.round(px)));
+  document.documentElement.style.setProperty('--rail', w + 'px');
+  try { localStorage.setItem(WSTORE, String(w)); } catch (e) {}
+  return w;
+}
+
+// Double-click: widen to whatever the longest label actually needs, or snap
+// back to the default if nothing is being clipped — so the same gesture both
+// opens the rail up and puts it away.  Measured off scrollWidth vs clientWidth
+// of the labels themselves, which is the exact overflow the ellipsis is hiding,
+// rather than a guess at pixels-per-character that a font change would break.
+function fitRail() {
+  let extra = 0;
+  $('#rail').querySelectorAll('.lbl').forEach(l => {
+    extra = Math.max(extra, l.scrollWidth - l.clientWidth);
+  });
+  setRailW(extra > 0 ? $('#rail').offsetWidth + extra + 6 : RAIL_DEF);
+}
+
+// Pointer events, not mouse: one code path covers a trackpad and a touchscreen,
+// and setPointerCapture keeps the drag alive when the cursor outruns the 9px
+// grip — which it does immediately, since the grip is what you are moving.
+$('#railgrip').addEventListener('pointerdown', e => {
+  if (e.button) return;
+  // Deliberately no preventDefault(): cancelling pointerdown suppresses the
+  // compatibility mouse events Chrome builds dblclick out of, which would kill
+  // the fit gesture below.  body.rzing's user-select:none — set here, before
+  // mousedown, so it lands before a selection can start — is what stops the
+  // drag smearing a highlight across the lane list instead.
+  const grip = e.currentTarget;
+  grip.setPointerCapture(e.pointerId);
+  grip.classList.add('drag');
+  document.body.classList.add('rzing');
+  const move = ev => setRailW(ev.clientX);
+  const up = () => {
+    grip.removeEventListener('pointermove', move);
+    grip.classList.remove('drag');
+    document.body.classList.remove('rzing');
+    showLane();
+  };
+  grip.addEventListener('pointermove', move);
+  grip.addEventListener('pointerup', up, {once: true});
+  grip.addEventListener('pointercancel', up, {once: true});
+});
+$('#railgrip').addEventListener('dblclick', fitRail);
+
+// Resets the queue the way pick() does — a reorder that left the loaded cards
+// on screen would be showing you the old order under a new label.  Nothing you
+// have already judged comes back with it: S.decided still filters the refetch,
+// and the flush means the server knows about it too.
+function setSort(v) {
+  if (v === S.sort) return;
+  S.sort = v;
+  try { localStorage.setItem(SSTORE, v); } catch (e) {}
+  flush(true); renderSort(); fetchCards(true);
+}
+
+function cycleSort() {
+  const opts = SORT.map(o => o[0]);
+  setSort(opts[(opts.indexOf(S.sort) + 1) % opts.length]);
+}
+
+/* ------------------------------------------------------- scout: the weights */
+// Everything about the scout lane's ranking lives in one profile object:
+// `axis` is a multiplier per axis (the ten sliders you normally touch) and
+// `points` is what each individual feature is worth (expand an axis to reach
+// them).  score = SUM_axis W_axis * SUM_feature P * activation / 100, with the
+// three BONUS axes' subtotal capped -- see score_profile.py, which is the one
+// definition of that arithmetic.  Nothing here computes a score; the server
+// does, so the number on the card and the number in the sort cannot disagree.
+// Insertion order IS the panel order: biggest lever first, then the ones you
+// reach for less often.  The server sends the axes sorted alphabetically, which
+// is the right answer for a set and the wrong one for a control panel — it put
+// `co` and `comp` above `role` and `level`, the two that decide almost every
+// ranking.  Any axis the server knows about and this map does not still draws,
+// at the end, under its bare key.
+const AXLABEL = {
+  role: 'Role — what the title says the work is',
+  level: 'Level — how senior, against your band',
+  geo: 'Geography — commute rings, MA, remote',
+  fresh: 'Freshness — decayed, discounted by date trust',
+  date: 'Date basis — who produced `posted`',
+  src: 'Source — direct board vs republisher',
+  etype: 'Employment type',
+  mode: 'Work mode',
+  dom: 'Domain — AI / finance (bonus)',
+  comp: 'Compensation (bonus)',
+  co: 'Company stage (bonus)',
+  query: 'Search relevance — only when searching',
+};
+let tuneTimer = null;
+
+async function ensureScout() {
+  if (S.scout.schema) return;
+  try {
+    const d = await api('/api/scout/profile');
+    S.scout.schema = d.schema; S.scout.axes = d.axes;
+    S.scout.bonus = d.bonus_axes || [];
+    S.scout.profiles = d.profiles || {};
+    S.scout.profile = JSON.parse(JSON.stringify(
+      S.scout.profiles[S.scout.name] || S.scout.profiles.default));
+    renderTune();
+  } catch (e) { toast('scout weights unavailable: ' + e.message); }
+}
+
+function toggleTune() {
+  S.scout.open = !S.scout.open;
+  if (S.scout.open && S.lane !== SCOUT) pick(SCOUT);
+  $('#tune').classList.toggle('on', S.scout.open);
+  document.body.classList.toggle('tuneon', S.scout.open);
+  if (S.scout.open) ensureScout();
+}
+
+function axValue(ax) {
+  const p = S.scout.profile;
+  return (p && p.axis && p.axis[ax] != null) ? p.axis[ax] : 1;
+}
+
+function renderTune() {
+  const p = S.scout.profile;
+  if (!p) { $('#tune').innerHTML = '<div class="sub">loading…</div>'; return; }
+  const byAxis = {};
+  S.scout.schema.forEach(f => (byAxis[f.axis] = byAxis[f.axis] || []).push(f));
+  const names = Object.keys(S.scout.profiles || {}).sort();
+  let h = `<h3>Scout weights</h3>
+    <p class="sub">Every number here is a slider, not a fitted value. Drag one
+    and the whole corpus re-ranks — the <b>why</b> line on each card is the same
+    arithmetic, so it moves with it. Axes marked
+    <span class="bonus">bonus</span> need data most rows lack, so their total is
+    capped at ${p.bonus_cap}.</p>
+    <div class="ax"><div class="axhd"><b>Explore</b>
+      <span class="v">${Math.round(S.scout.explore * 100)}%</span></div>
+      <input type="range" min="0" max="50" step="5"
+             value="${Math.round(S.scout.explore * 100)}" data-explore>
+      <div class="sub" style="margin:2px 0 0">Share of each batch drawn from the
+      middle of the ranking instead of the top, spread across companies and
+      families.</div></div>`;
+  const known = Object.keys(AXLABEL);
+  const axes = known.filter(a => (S.scout.axes || []).includes(a))
+    .concat((S.scout.axes || []).filter(a => !known.includes(a)));
+  axes.forEach(ax => {
+    const bonus = (S.scout.bonus || []).includes(ax);
+    const v = axValue(ax);
+    h += `<div class="ax" data-ax="${ax}">
+      <div class="axhd"><b class="${bonus ? 'bonus' : ''}">${esc(AXLABEL[ax] || ax)}</b>
+        <span class="v">×${v.toFixed(2)}</span></div>
+      <input type="range" min="0" max="200" step="5" value="${Math.round(v * 100)}"
+             data-axis="${ax}">
+      <div class="subs">` + byAxis[ax].map(f =>
+        `<label class="sf"><span title="${esc(f.name)}">${esc(f.name.split('.')[1])}</span>
+          <input type="number" step="1" data-pt="${esc(f.name)}"
+                 value="${p.points[f.name]}"></label>`).join('') + `</div></div>`;
+  });
+  h += `<div class="row"><select data-prof>` + names.map(n =>
+        `<option ${n === S.scout.name ? 'selected' : ''}>${esc(n)}</option>`).join('')
+     + `</select><button data-act="save">Save</button></div>
+       <div class="row"><button data-act="saveas">Save as…</button>
+       <button data-act="reset">Reset</button></div>`;
+  $('#tune').innerHTML = h;
+  wireTune();
+}
+
+function wireTune() {
+  const t = $('#tune');
+  t.querySelectorAll('.axhd').forEach(hd => hd.onclick = () => {
+    const box = hd.parentElement.querySelector('.subs');
+    if (box) box.classList.toggle('on');
+  });
+  const ex = t.querySelector('[data-explore]');
+  if (ex) ex.oninput = () => {
+    S.scout.explore = (+ex.value) / 100;
+    ex.parentElement.querySelector('.v').textContent = ex.value + '%';
+    tuneChanged();
+  };
+  t.querySelectorAll('[data-axis]').forEach(r => r.oninput = () => {
+    const v = (+r.value) / 100;
+    S.scout.profile.axis[r.dataset.axis] = v;
+    r.parentElement.querySelector('.v').textContent = '×' + v.toFixed(2);
+    tuneChanged();
+  });
+  t.querySelectorAll('[data-pt]').forEach(i => i.onchange = () => {
+    S.scout.profile.points[i.dataset.pt] = +i.value || 0;
+    tuneChanged();
+  });
+  const sel = t.querySelector('[data-prof]');
+  if (sel) sel.onchange = () => {
+    S.scout.name = sel.value;
+    S.scout.profile = JSON.parse(JSON.stringify(S.scout.profiles[sel.value]));
+    renderTune(); tuneChanged();
+  };
+  t.querySelectorAll('[data-act]').forEach(b => b.onclick = () => scoutAct(b.dataset.act));
+}
+
+// Debounced, and it always RESETS the queue: a weight change reorders
+// everything, so continuing through cards chosen under the old weights would
+// show you a ranking that no longer exists.
+function tuneChanged() {
+  clearTimeout(tuneTimer);
+  tuneTimer = setTimeout(() => { S.done = false; fetchCards(true); }, 180);
+}
+
+async function scoutAct(what) {
+  if (what === 'reset') {
+    S.scout.profile = JSON.parse(JSON.stringify(
+      S.scout.profiles[S.scout.name] || S.scout.profiles.default));
+    renderTune(); return tuneChanged();
+  }
+  let name = S.scout.name;
+  if (what === 'saveas') {
+    name = (prompt('Save these weights as:', name === 'default' ? '' : name) || '').trim();
+    if (!name) return;
+  }
+  try {
+    const d = await api('/api/scout/profile', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, profile: S.scout.profile})});
+    S.scout.profiles = d.profiles; S.scout.name = name;
+    renderTune(); toast('saved ' + name);
+  } catch (e) { toast('save failed: ' + e.message); }
+}
+
+/* ------------------------------------------------------------------- keys */
+// Every binding lives here rather than inline in the keydown handler, because
+// the keys row at the bottom of the page presses the same ones on click: a
+// legend that named an action the mouse could not reach was two lists wearing
+// one coat.  Returns true when the key was handled; suppressing the browser's
+// own use of it is the caller's job, since a click has nothing to suppress.
+// The one open, so the `o` key and the three mouse gestures cannot drift apart.
+// It toasts on a row carrying neither URL rather than doing nothing: 35 of the
+// 269,815 live rows have no link at all, which is rare enough that it has to
+// say so when it happens — a keystroke that appears to do nothing is survivable
+// because you just press it again, a CLICK that appears to do nothing reads as
+// a broken cell.
+function openCard(c) {
+  const url = c && (c.apply_url || c.job_url);
+  if (!url) return toast('no link on this row');
+  window.open(url, '_blank', 'noopener');
+}
+
+// Arrows and the vim keys mean the same thing; the uppercase rows are the same
+// letters arriving with shift held, which is how a range extends.  j/k already
+// agree with apply.html's row movement.  h/l are a new meaning for a letter
+// that page spends on a facet, and the arrows are the primary binding here.
+const GRIDMOVE = {
+  ArrowLeft: -1, ArrowRight: 1, ArrowUp: 'up', ArrowDown: 'down',
+  h: -1, l: 1, k: 'up', j: 'down',
+  H: -1, L: 1, K: 'up', J: 'down',
+};
+
+function act(k, ev) {
+  if (k === 'a') decide('approve');
+  // Shift-A, not a letter of its own: it is `a` plus a claim about what you
+  // already did, and it is the only key here that writes a date.  A capital is
+  // hard to hit by accident, and 'a' stays where the hand already knows it.
+  else if (k === 'A') decide('approve', 'applied');
+  else if (k === 'd') decide('deny');
+  else if (k === 'm') decide('maybe');
+  else if (k === 'u') undo();
+  else if (k === 'o') openCard(S.cards[S.i]);
+  // Plain x, not shift-x: the confirm dialog is the safety gate, and apply.html
+  // binds x on its own, so the two pages would disagree about the same key.
+  // Deliberately the CURSOR's company and never the selection's: the dialog
+  // names one company and counts its rows, and there is no honest version of
+  // that sentence for twelve rows across nine companies.  Same for `o`: one
+  // keystroke, one tab.
+  else if (k === 'x' || k === 'X') killCompany();
+  else if (k === 'v') setView(S.view === 'grid' ? 'card' : 'grid');
+  // ---- the grid cursor.  Guarded on the view so card mode still returns
+  // false for all of these and the browser keeps them: .card scrolls, and a
+  // long one needs its arrow keys and its space bar.
+  else if (S.view === 'grid' && GRIDMOVE[k] !== undefined) {
+    const d = GRIDMOVE[k], cols = gridCols();
+    moveCur(d === 'up' ? -cols : d === 'down' ? cols : d,
+            !!(ev && ev.shiftKey));
+  }
+  else if (S.view === 'grid' && k === ' ') {
+    const c = S.cards[S.i];
+    if (c) {
+      if (S.sel.has(c.job_key)) S.sel.delete(c.job_key);
+      else S.sel.add(c.job_key);
+      S.anchor = c.job_key;                  // and a range measures from here
+      paintGrid();
+    }
+  }
+  else if (S.view === 'grid' && k === 'Escape') { clearSel(); paintGrid(); }
+  else if (LANE_KEYS.includes(k)) {
+    const l = S.lanes[LANE_KEYS.indexOf(k)]; if (l) pick(l.key);
+  }
+  // [ and ] step through all twenty, wrapping.  With eleven swath lanes added there
+  // are more lanes than number keys, and a lane you cannot reach from the keyboard is a
+  // lane you will not burn down.  pick() scrolls the rail to whatever this lands on.
+  else if (k === '[' || k === ']') {
+    const i = S.lanes.findIndex(l => l.key === S.lane);
+    if (S.lanes.length) {
+      const n = S.lanes.length;
+      pick(S.lanes[((i < 0 ? 0 : i) + (k === ']' ? 1 : -1) + n) % n].key);
+    }
+  }
+  // 't' for time-posted, and the same key on the apply page: 'd' is deny here
+  // and 's' is skip there, so it is the one letter both pages can spare.
+  else if (k === 't') cycleSort();
+  else if (k === 'w') toggleTune();
+  else if (k === 'g') setRail(!document.body.classList.contains('railoff'));
+  else if (k === '/') { $('#filter').style.display = 'block'; $('#q').focus(); }
+  else if (k === '?') $('#helpdlg').showModal();
+  else return false;
+  return true;
+}
+
+document.addEventListener('keydown', e => {
+  if (document.querySelector('dialog[open]')) return;
+  // SELECT and TEXTAREA as well as INPUT.  The scout panel's profile picker is
+  // a <select>: with it focused an arrow key would move the grid cursor and
+  // the preventDefault() below would swallow the dropdown's own use of it.
+  // Scoped to #q inside, too — the panel's range and number inputs used to
+  // reach the branch below, so Enter on a weight box set the lane filter to
+  // that weight.
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) {
+    if (e.target.id === 'q') {
+      if (e.key === 'Enter') { S.q = e.target.value.trim(); e.target.blur();
+                               S.done = false; fetchCards(true); }
+      if (e.key === 'Escape') { e.target.value = ''; S.q = ''; e.target.blur();
+                                $('#filter').style.display = 'none';
+                                S.done = false; fetchCards(true); }
+    }
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (act(e.key, e)) e.preventDefault();
+});
+
+// Click sets the cursor; shift-click takes the range from the anchor — the
+// gesture apply.html's mark boxes already have.  A plain click deliberately
+// leaves the selection alone rather than silently throwing away a sweep you
+// were halfway through building; Esc is what clears.
+$('#grid').addEventListener('mousedown', e => {
+  const cell = e.target.closest('.gcell');
+  if (!cell) return;
+  const i = +cell.dataset.i;
+  if (!S.cards[i]) return;
+  // Command/ctrl-click and middle-click are the browser's own "open this in a
+  // tab", so they mean it here too — and they open WITHOUT moving the cursor or
+  // the anchor.  That asymmetry with double-click is the point: double-click is
+  // "go to this row and open it", this is "open that one without leaving where
+  // I am", so a sweep you have selected survives peeking at three rows in it.
+  if (e.metaKey || e.ctrlKey || e.button === 1) {
+    // Scoped to the middle button, never the left.  preventDefault() on a
+    // left mousedown suppresses the compatibility events Chrome builds
+    // dblclick out of and would kill the gesture below — the same trap the
+    // rail grip documents.  On the middle button it is what stops Windows
+    // opening its autoscroll widget over the grid.
+    if (e.button === 1) e.preventDefault();
+    return openCard(S.cards[i]);
+  }
+  if (e.button) return;                       // right-click keeps its menu
+  if (e.shiftKey) {
+    if (S.anchor == null && S.cards[S.i]) S.anchor = S.cards[S.i].job_key;
+    S.i = i; setRange(S.anchor, i);
+  } else {
+    S.i = i; S.anchor = S.cards[i].job_key;
+  }
+  paintGrid();
+});
+
+// Double-click opens.  The cursor is already on the cell by now — the two
+// mousedowns underneath this put it there — which is exactly the intent.
+$('#grid').addEventListener('dblclick', e => {
+  const cell = e.target.closest('.gcell');
+  if (!cell) return;
+  openCard(S.cards[+cell.dataset.i]);
+});
+
+// Scrolling toward the bottom asks for more.  This is the case the offset
+// exists for: a lane you are READING rather than deciding has nothing else
+// that would ever advance it, and topUp's undecided-in-buffer test is
+// deliberately not tripped by a full buffer you have not touched yet.
+$('#grid').addEventListener('scroll', () => {
+  const el = $('#grid');
+  if (!S.done && !S.loading
+      && el.scrollTop + el.clientHeight > el.scrollHeight - 600)
+    fetchCards(false);
+});
+
+$('#keys').addEventListener('click', e => {
+  const b = e.target.closest('button[data-k]');
+  if (!b) return;
+  b.blur();          // else the next space or enter presses it a second time
+  act(b.dataset.k);
+});
+
+$('#killyes').onclick = () => { const c = S.cards[S.i]; $('#killdlg').close();
+                                if (c) doKill(c.company_norm); };
+$('#killno').onclick = () => $('#killdlg').close();
+$('#helpno').onclick = () => $('#helpdlg').close();
+// A decision sitting in S.pending must not die with the tab.
+window.addEventListener('beforeunload', () => {
+  if (!S.pending.length) return;
+  navigator.sendBeacon('/api/decide',
+    new Blob([JSON.stringify({decisions: S.pending})],
+             {type: 'application/json'}));
+});
+setInterval(() => flush(true), 5000);           // safety net for a stalled batch
+
+// api() throws now, and most call sites here are fire-and-forget handlers with
+// nowhere to put a catch.  One listener turns every one of those into a toast,
+// so a failed request says something instead of leaving the page looking like
+// it simply did nothing.  fetchCards catches its own and never reaches here.
+window.addEventListener('unhandledrejection', e => {
+  toast((e.reason && e.reason.message) || 'request failed');
+});
+
+$('#railtog').onclick = () => {
+  $('#railtog').blur();       // else space/enter presses it again, as in .keys
+  setRail(!document.body.classList.contains('railoff'));
+};
+
+renderSort();                                   // stored choice, before any fetch
+renderView();
+// Applied before the first paint, alongside the rail below, so the page does
+// not flash card mode on its way into the grid.  fetchCards reads S.view for
+// its page size, so the boot fetch already asks for the grid's 120.
+document.body.classList.toggle('gridview', S.view === 'grid');
+// Applied before the first paint so the rail doesn't flash in and collapse.
+// Read defensively: only the exact string means off, so a corrupt or absent
+// value leaves the menu visible rather than hiding the whole lane list.
+try { if (localStorage.getItem(RSTORE) === 'off') setRail(true); } catch (e) {}
+// Same defensive read for the width: a corrupt value falls through to the CSS
+// default rather than collapsing the menu to nothing.
+try { const w = parseInt(localStorage.getItem(WSTORE), 10);
+      if (w > 0) setRailW(w); } catch (e) {}
+(async () => { await loadLanes();
+               if (S.lanes.length) S.lane = S.lanes[0].key;
+               // Counted, not written down: the help dialog said "19 lanes"
+               // while there were 20, which is what a hardcoded number does.
+               $('#nlanes').textContent = S.lanes.length;
+               renderLanes(); showLane(); await fetchCards(true); })();
+</script>
+</body></html>

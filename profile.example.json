@@ -1,0 +1,108 @@
+{
+  "_note": [
+    "The tunable half of the ranking: what THIS operator is looking for.",
+    "Everything here is data, not mechanism.  The gates that are true of the",
+    "job market regardless of who is searching -- WRONG_ROLE, JUNK_TITLE,",
+    "LAB, PROF, LOCAL_OFF, the seniority LADDER -- stay in code, because they",
+    "are not preferences and nobody should have to re-derive them.",
+    "",
+    "Copy to profile.json and edit.  vocab.py falls back to this file when",
+    "profile.json is absent, so a fresh clone runs with no setup.",
+    "",
+    "The values below are a worked example (a platform/infrastructure engineer",
+    "around Austin, TX), not a real search.  Regex fragments are compiled with",
+    "re.IGNORECASE | re.VERBOSE and joined with |, so whitespace is ignored and",
+    "\\s+ is required between words."
+  ],
+  "target_titles": {
+    "_note": "Three tiers, 40 / 32 / 22 points.  First match wins.",
+    "tier1": [
+      "platform\\s+engineer",
+      "infrastructure\\s+engineer",
+      "site\\s+reliability\\s+engineer",
+      "\\bsre\\b",
+      "founding\\s+(?:infrastructure|platform)\\s+engineer"
+    ],
+    "tier2": [
+      "backend\\s+engineer",
+      "distributed\\s+systems\\s+engineer",
+      "data\\s+(?:platform|infrastructure)\\s+engineer",
+      "systems\\s+engineer"
+    ],
+    "tier3": [
+      "software\\s+engineer",
+      "devops\\s+engineer",
+      "cloud\\s+engineer",
+      "developer\\s+(?:advocate|experience)",
+      "build\\s+(?:and\\s+release\\s+)?engineer"
+    ]
+  },
+  "domain_keywords": {
+    "_note": "The differentiated half -- what makes a posting specifically interesting. Worth 20 points, and opens a second role gate (FIN_ROLE) for titles that do not look like an engineering ladder.",
+    "patterns": [
+      "kubernetes",
+      "\\bk8s\\b",
+      "terraform",
+      "observability",
+      "\\bkafka\\b",
+      "event\\s+streaming",
+      "service\\s+mesh",
+      "multi[\\s-]?tenant",
+      "\\bdatabase\\s+internals\\b"
+    ]
+  },
+  "anti_titles": {
+    "_note": "Hard exclusions by title, whatever else the row scores. Kept small on purpose -- this is a scalpel, not the WRONG_ROLE backstop.",
+    "patterns": [
+      "\\bdata\\s+scientist\\b"
+    ]
+  },
+  "geography": {
+    "_note": [
+      "The commute-ring lane.  A posting's town is read out of free-text",
+      "`location`, because the master CSV's city/state columns are dropped at",
+      "load and every in-state row otherwise collapses to one bucket value.",
+      "ring1 = 12 points, ring2 = 6, border = 4 (halved when the town appears",
+      "in a later location segment rather than the first).",
+      "",
+      "These rings are an example built around the same metro ma_remote_build.py",
+      "cuts to, so the demo's `local` lane is populated.  Swap in your own."
+    ],
+    "state_mark": "\\b(?:ma|mass|massachusetts)\\b",
+    "ring1": [
+      "boston",
+      "cambridge",
+      "somerville",
+      "brookline",
+      "charlestown"
+    ],
+    "ring2": [
+      "newton",
+      "waltham",
+      "quincy",
+      "medford",
+      "malden",
+      "watertown",
+      "arlington",
+      "belmont",
+      "dedham",
+      "milton"
+    ],
+    "border": [
+      "lowell",
+      "brockton",
+      "salem",
+      "lynn",
+      "woburn"
+    ]
+  },
+  "level": {
+    "_note": [
+      "Rungs come from the LADDER in level.py: 0 entry, 1 associate,",
+      "2 unmarked IC, 3 mid/II, 4 senior, 5 staff/lead, 6 manager, 7 exec.",
+      "target is the band the search is aimed at; max drops everything above it."
+    ],
+    "target_rung": 2,
+    "max_rung": 3
+  }
+}
