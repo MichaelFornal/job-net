@@ -23,7 +23,27 @@ def load(path):
     return out
 
 
+def check(path):
+    """Every pattern must compile cleanly under Python too, and mean the same
+    thing it means to grep.  A FutureWarning here (POSIX class read as a nested
+    set) is not cosmetic: it is the two engines disagreeing."""
+    import warnings
+    bad = 0
+    for i, p in enumerate(load(path), 1):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            try:
+                re.compile(p, re.I)
+            except Exception as e:
+                sys.stderr.write(f"FAIL: pattern {i} is not portable: {p}\n"
+                                 f"      {e}\n")
+                bad = 1
+    return bad
+
+
 def main():
+    if sys.argv[1] == "--check":
+        return check(sys.argv[2])
     deny = load(sys.argv[1])
     allow = load(sys.argv[2]) if len(sys.argv) > 2 else []
     dre = [re.compile(p, re.I) for p in deny]

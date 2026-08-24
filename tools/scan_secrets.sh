@@ -56,6 +56,14 @@ while IFS= read -r pat; do
     badpat=1
   fi
 done < "$TMP/deny"
+# The sift step reads these same patterns with Python's re, which does not
+# understand POSIX classes.  A pattern that means one thing to grep and another
+# to Python is how a real credential slips through the allowlist, so both
+# engines have to accept it.
+if ! python3 "$ROOT/tools/_sift.py" --check "$TMP/deny"; then
+  badpat=1
+fi
+
 if [ "$badpat" = 1 ]; then
   echo "RESULT: FAIL (the scanner itself is broken; fix the patterns)"
   exit 1

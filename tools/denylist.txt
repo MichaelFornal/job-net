@@ -7,6 +7,12 @@
 # identity-specific belongs in `tools/denylist.local.txt`, which is gitignored
 # and read automatically when present.  Keep it that way.
 
+# PORTABILITY: these patterns are read by TWO engines -- grep -E in the scan
+# and Python's re in tools/_sift.py.  POSIX classes like [[:space:]] work in
+# the first and silently mean something else in the second (a set containing
+# '[', ':', 's'...), so a real bearer token matched by grep was invisible to
+# the sift step.  Stick to syntax both understand: [ \t], not [[:space:]].
+
 # --- credentials ---
 AKIA[0-9A-Z]{16}
 ASIA[0-9A-Z]{16}
@@ -18,8 +24,8 @@ glpat-[A-Za-z0-9_-]{20,}
 AIza[0-9A-Za-z_-]{35}
 ya29\.[0-9A-Za-z_-]{20,}
 -----BEGIN [A-Z ]*PRIVATE KEY-----
-Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}
-(password|passwd|secret|api[_-]?key)[[:space:]]*[=:][[:space:]]*["'][^"']{8,}["']
+Authorization:[ \t]*Bearer[ \t]+[A-Za-z0-9._-]{12,}
+(password|passwd|secret|api[_-]?key)[ \t]*[=:][ \t]*["'][^"']{8,}["']
 
 # --- machine paths (leak the account name of whoever built the tree) ---
 /Users/[a-z]
