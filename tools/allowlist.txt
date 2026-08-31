@@ -16,3 +16,11 @@ API_KEY = "jobboerse-jobsuche"
 github\.com/MichaelFornal
 MichaelFornal
 253626225\+MichaelFornal@users\.noreply\.github\.com
+
+# The identity this repo lived under until 2026-08-31 (FornalPortfolio, retired).
+# The commit emails were rewritten out of history, but this file's own past
+# content still carries these three strings, and history cannot be edited in
+# place.  They exempt the historical diffs of this file and nothing else.
+github\.com/FornalPortfolio
+FornalPortfolio
+320591349\+FornalPortfolio@users\.noreply\.github\.com
