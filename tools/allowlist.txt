@@ -13,6 +13,6 @@ API_KEY = "jobboerse-jobsuche"
 # The repo's own identity.  The account handle contains the operator's surname,
 # which the local denylist denies -- that denial is right for prose and wrong
 # for the URL this repo lives at.  Exempt the specific forms, not the name.
-github\.com/FornalPortfolio
-FornalPortfolio
-320591349\+FornalPortfolio@users\.noreply\.github\.com
+github\.com/MichaelFornal
+MichaelFornal
+253626225\+MichaelFornal@users\.noreply\.github\.com
