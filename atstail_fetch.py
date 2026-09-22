@@ -182,7 +182,8 @@ OUT = os.path.join(cc.NORM_DIR, "atstail.jsonl")
 STATE = os.path.join(BASE, "atstail_fetch_state.json")
 LEDGER = os.path.join(BASE, "atstail_posted_ledger.json")
 
-FAMILIES = ["pinpoint", "keka", "join", "zohorecruit", "taleo", "wttj"]
+FAMILIES = ["pinpoint", "keka", "join", "zohorecruit", "taleo", "wttj",
+            "paylocity"]
 
 # Per-family request budget.  One flat worker pool serves all six, so without
 # this the fan-out lands on whichever host is slowest.  join and wttj are
@@ -192,13 +193,19 @@ FAMILIES = ["pinpoint", "keka", "join", "zohorecruit", "taleo", "wttj"]
 # it is a stateful Java app (Oracle TEE), the search endpoint is a POST that
 # does real work, and these are 45 enterprise boards worth ~8.5k rows.
 RPS = {"pinpoint": 6.0, "keka": 6.0, "join": 2.0,
-       "zohorecruit": 4.0, "taleo": 3.0, "wttj": 5.0}
+       "zohorecruit": 4.0, "taleo": 3.0, "wttj": 5.0,
+       # recruiting.paylocity.com is ONE shared host for every tenant, like
+       # join.com and unlike the per-tenant subdomain families, so it gets a
+       # join-shaped budget rather than a pinpoint-shaped one.  The discovery
+       # sweep ran 3.0 clean with zero 429s.
+       "paylocity": 3.0}
 
 # Max threads inside one family at once.  RPS bounds the average rate;
 # this bounds the BURST, which is what a Cloudflare-fronted per-IP limiter
 # actually reacts to (see the long note in ats_fetch.work()).
 CONCURRENCY = {"pinpoint": 12, "keka": 12, "join": 4,
-               "zohorecruit": 8, "taleo": 8, "wttj": 6}
+               "zohorecruit": 8, "taleo": 8, "wttj": 6,
+               "paylocity": 4}
 
 WORKERS = int(os.environ.get("ATSTAIL_WORKERS") or 48)
 BUDGET_MIN = int(os.environ.get("ATSTAIL_BUDGET_MIN") or 0)
@@ -1155,8 +1162,110 @@ def f_wttj(s, tenant, _meta):
     return out
 
 
+# ===========================================================================
+# paylocity
+# ===========================================================================
+# The board page renders through React, so it carries no <a> links to
+# individual jobs -- but the jobs ARE in it, as an inline JSON array.  One
+# request per board returns title, structured City/State/Country, a remote
+# flag, the description, and PublishedDate, which is a REAL employer-supplied
+# date; only ~19% of the corpus carries one.
+#
+# Discovery is paylocity_discover_boards.py: boards are keyed by a v4 UUID that
+# cannot be enumerated, so it walks the vendor's legacy integer route instead.
+# tenants/paylocity.csv holds tenant=<uuid>,company.
+_PL_BOARD = "https://recruiting.paylocity.com/Recruiting/Jobs/All/%s"
+_PL_DETAIL = "https://recruiting.paylocity.com/Recruiting/Jobs/Details/%s"
+_PL_DEAD = re.compile(r"<title>[^<]*job\s*not\s*found", re.I)
+_PL_COUNTRY = {"USA": "US", "U.S.A.": "US", "United States": "US"}
+
+
+def _pl_jobs(body):
+    """Pull the inline "Jobs":[...] array out of a board page.
+
+    Walks the brackets rather than regexing to the next "]": descriptions are
+    free text and routinely contain brackets and escaped quotes, so a
+    non-greedy match truncates the array at the first job whose description
+    mentions one.  The walker tracks string state and escapes.
+    """
+    i = body.find('"Jobs":[')
+    if i < 0:
+        return []
+    start = body.index("[", i)
+    depth, j, instr, esc = 0, start, False, False
+    while j < len(body):
+        c = body[j]
+        if instr:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                instr = False
+        elif c == '"':
+            instr = True
+        elif c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                break
+        j += 1
+    else:
+        return []
+    try:
+        out = json.loads(body[start:j + 1])
+    except ValueError:
+        raise Transient("paylocity: Jobs array did not parse")
+    return out if isinstance(out, list) else []
+
+
+def f_paylocity(s, tenant, meta):
+    r = req("paylocity", s, _PL_BOARD % tenant)
+    body = r.text or ""
+    # Gate on the BODY.  A retired board answers HTTP 200 with a "Job Not
+    # Found" page, so the status code is a worthless validator here -- the same
+    # trap BambooHR, SmartRecruiters and iCIMS all set.
+    if _PL_DEAD.search(body):
+        raise Dead("paylocity: board retired (Job Not Found)")
+    company = (meta or {}).get("company") or ""
+    out = []
+    for p in _pl_jobs(body):
+        if not isinstance(p, dict) or p.get("IsInternal"):
+            continue
+        title = p.get("JobTitle") or ""
+        jid = str(p.get("JobId") or "")
+        if not title or not jid:
+            continue
+        loc = p.get("JobLocation") if isinstance(p.get("JobLocation"),
+                                                 dict) else {}
+        city = (loc.get("City") or "").strip()
+        state = (loc.get("State") or "").strip()
+        country = (loc.get("Country") or "").strip()
+        country = _PL_COUNTRY.get(country, country)
+        locstr = (p.get("LocationName") or "").strip() or ", ".join(
+            x for x in (city, state) if x)
+        remote = bool(p.get("IsRemote"))
+        out.append(cc.row(
+            source="paylocity", source_type="ats",
+            company=company or tenant,
+            title=title,
+            employment_type=cc.classify_any(p.get("HiringDepartment"), title),
+            work_mode="Remote" if remote else "",
+            location=locstr, city=city, state=state, country=country,
+            remote=remote,
+            # A real employer date, so it goes through posted_for as `real` and
+            # never falls back to the first-seen ledger.
+            posted=posted_for("paylocity", jid,
+                              cc.ymd(iso=p.get("PublishedDate"))),
+            apply_url=_PL_DETAIL % jid, job_id=jid, board=tenant,
+            board_url=_PL_BOARD % tenant))
+    return out
+
+
 FETCH = {"pinpoint": f_pinpoint, "keka": f_keka, "join": f_join,
-         "zohorecruit": f_zohorecruit, "taleo": f_taleo, "wttj": f_wttj}
+         "zohorecruit": f_zohorecruit, "taleo": f_taleo, "wttj": f_wttj,
+         "paylocity": f_paylocity}
 
 
 # ===========================================================================

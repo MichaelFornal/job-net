@@ -245,8 +245,20 @@ def get_json(s, url, params=None, want=("data",)):
             time.sleep(2 * (attempt + 1))
             continue
         body = (r.text or "").lstrip()
-        if r.status_code == 400 and "Invalid parameter" in body:
-            raise SystemExit("USAJOBS rejected a parameter: %s" % body[:200])
+        # A 400 from this API is ALWAYS deterministic -- it is a rejected
+        # request, not a busy server -- so it must never enter the retry
+        # ladder.  "Invalid parameter" was the only shape matched here, and on
+        # 2026-09-05 the endpoint began returning a different one:
+        #   Error code: 400. Invalid URL pattern. ...
+        #   Path: /api/historicjoa/api/historicjoa
+        # That is USAJOBS's own gateway doubling the path (reproduced 09-07
+        # with no query string at all, while /api/codelist/agencysubelements
+        # still answers 200), so nothing here can fix it -- but falling
+        # through cost 5 tries and 48s of 3/6/9/12s backoff every single run.
+        # Fail fast and loudly instead; the caller records it and moves on.
+        if r.status_code == 400:
+            raise SystemExit("USAJOBS rejected the request (HTTP 400): %s"
+                             % body[:200])
         if r.status_code == 401:
             raise SystemExit(
                 "USAJOBS /api/search returned 401 Unauthorized.\n"

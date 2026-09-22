@@ -10,7 +10,7 @@
 # space, and kill the build while there is still room to recover.
 #
 # Usage: ./run_monolith_guarded.sh [extra all_jobs_build.py args...]
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 MIN_FREE_GB=${MIN_FREE_GB:-6}
 LOG=logs/all_jobs_build_final.log
 
@@ -20,7 +20,7 @@ echo "all_jobs_build pid $PID (guard: kill if free disk < ${MIN_FREE_GB} GiB)"
 
 PEAK_RSS=0
 while kill -0 $PID 2>/dev/null; do
-  FREE=$(df -k . | tail -1 | awk '{printf "%d", $4/1048576}')
+  FREE=$(df -k /Users/michaelfornal | tail -1 | awk '{printf "%d", $4/1048576}')
   RSS=$(ps -o rss= -p $PID 2>/dev/null | tr -d ' ')
   [ -n "$RSS" ] && [ "$RSS" -gt "$PEAK_RSS" ] && PEAK_RSS=$RSS
   if [ "$FREE" -lt "$MIN_FREE_GB" ]; then
@@ -33,6 +33,6 @@ while kill -0 $PID 2>/dev/null; do
 done
 wait $PID
 RC=$?
-echo "all_jobs_build exit $RC | peak RSS $(echo "$PEAK_RSS" | awk '{printf "%.1f", $1/1048576}') GiB | free disk $(df -k . | tail -1 | awk '{printf "%d", $4/1048576}') GiB"
+echo "all_jobs_build exit $RC | peak RSS $(echo "$PEAK_RSS" | awk '{printf "%.1f", $1/1048576}') GiB | free disk $(df -k /Users/michaelfornal | tail -1 | awk '{printf "%d", $4/1048576}') GiB"
 tail -25 "$LOG"
 exit $RC

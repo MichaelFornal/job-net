@@ -12,7 +12,7 @@
 # duplicates; the delisting merge measures its shrink guard against the CURRENT
 # live row count, and an inflated denominator would make a healthy sweep look
 # like a 50% loss and trip a refusal on every platform.
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 set -x
 RID="full-$(date -u +%Y%m%dT%H%M%SZ)"
 

@@ -150,6 +150,15 @@ TENANTS = os.environ.get("DAYFORCE_TENANTS") or os.path.join(
     BASE, "tenants", "dayforce.csv")
 FALLBACK_TENANTS = os.path.join(BASE, "dayforce_candidates.csv")
 OUT = os.path.join(cc.NORM_DIR, "dayforce.jsonl")
+# Rows land here first and are folded into OUT board-scoped by
+# cc.merge_board_scoped.  Until 2026-09-16 this fetcher appended
+# straight to OUT, which is why run_all's rotate_family would not
+# refresh its state: dropping the done-keys of an append-only family
+# re-fetches every board and APPENDS a second copy of every row
+# (run_all.py:958-1010).  Not refreshing was the other half of that
+# trade and it is the larger one -- the family stops producing new
+# postings entirely while still reporting ok.
+PART = OUT + ".part"
 STATE = os.path.join(BASE, "dayforce_fetch_state.json")
 LEDGER = os.path.join(BASE, "dayforce_posted_ledger.json")
 
@@ -740,7 +749,14 @@ def main():
     if not todo:
         return 0
 
-    w = cc.Writer(OUT)
+    # Fold in a part left behind by a killed run BEFORE reopening it, so the
+    # part this run builds is exactly one generation.  See
+    # cc.merge_board_scoped.
+    _ck, _cn = cc.merge_board_scoped(OUT, PART)
+    if _cn:
+        print("  carried in %d row(s) from a previous run's part file "
+              "(%d kept)" % (_cn, _ck), flush=True)
+    w = cc.Writer(PART)
     deadline = time.time() + BUDGET_MIN * 60 if BUDGET_MIN else None
     done = 0
     stopped = False
@@ -766,6 +782,10 @@ def main():
             if _ledger_dirty[0]:
                 cc.save_state(LEDGER, _ledger)
         w.close()
+        _kept, _added = cc.merge_board_scoped(OUT, PART)
+        if _added or _kept:
+            print("  merged board-scoped: %d new row(s) over %d kept"
+                  % (_added, _kept), flush=True)
     print("DONE dayforce: %s  (429 backoffs: %d)%s"
           % (_stats, _n429[0],
              "  [BUDGET REACHED — rest still pending]" if stopped else ""),

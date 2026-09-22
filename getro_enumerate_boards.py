@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Enumerate every Getro collection via api.getro.com by ID (single keep-alive conn).
-Usage: python getro_enumerate_boards.py START END OUT.jsonl
+Usage: python enum_getro.py START END OUT.jsonl
 Resumable: skips IDs already present in OUT.jsonl and OUT.jsonl.scanned."""
 import sys, os, json, time, random, warnings
 warnings.filterwarnings("ignore")
@@ -22,6 +22,25 @@ if os.path.exists(SCAN):
         line = line.strip()
         if line.isdigit():
             done_ids.add(int(line))
+
+# THE ALLOCATOR FRONTIER.  A 404 means two completely different things either
+# side of it: below, the id was allocated and the collection is gone (a real,
+# permanent gap -- record it); above, the id simply is not allocated YET, and
+# recording it blacklists an id Getro will hand to a real board later.
+#
+# Recording both is how this sweep froze.  run_all.max_collection_id() sizes
+# END from max(scanned), so every run pushed the scanned frontier 3,000 ids
+# further past the allocator and then re-measured from its own overshoot.
+# Measured 2026-09-04: scanned frontier 85,727 against an allocator at ~54,650
+# moving ~46 ids/day -- 30,000 ids ahead, i.e. permanently frozen, and a live
+# probe of id 54,509 returned Playground Global, a real board already skipped.
+FOUND_MAX = 0
+if os.path.exists(OUT):
+    for line in open(OUT):
+        try:
+            FOUND_MAX = max(FOUND_MAX, int(json.loads(line).get("id", 0)))
+        except Exception:
+            continue
 
 sess = requests.Session()
 fout = open(OUT, "a", buffering=1)
@@ -59,6 +78,7 @@ def extract(raw):
     }
 
 def main():
+    global FOUND_MAX
     ids = [i for i in range(START, END + 1) if i not in done_ids]
     total = len(ids)
     c = {"board": 0, "company": 0, "other200": 0, "404": 0, "err": 0, "flagged": 0}
@@ -83,7 +103,14 @@ def main():
             c["flagged"] += 1; ferr.write(json.dumps({"id": cid, "status": 418}) + "\n")
         else:
             c["err"] += 1; ferr.write(json.dumps({"id": cid, "status": status}) + "\n")
-        fscan.write(str(cid) + "\n")
+        # Above the frontier a 404 is "not allocated yet", not "gone".  Leave
+        # it unscanned so the next run re-probes it; ENUM_SLACK caps that
+        # re-probe at 3,000 ids, which is the sweep-past-the-frontier the
+        # design wants.  Any 200 advances the frontier for the rest of the run.
+        if status == 200 and cid > FOUND_MAX:
+            FOUND_MAX = cid
+        if not (status == 404 and cid > FOUND_MAX):
+            fscan.write(str(cid) + "\n")
         if n % 500 == 0 or n == total:
             el = time.time() - t0; rate = n / el if el else 0
             eta = (total - n) / rate if rate else 0

@@ -24,7 +24,7 @@
 #
 # Every stage is resumable and none is fatal to the next: a partial sweep still
 # yields tenants, and a budget-capped fetch queues the rest for tomorrow.
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 mkdir -p logs
 STATUS=logs/full_chain.status
 say() { echo "[$(date -u '+%F %T')] $*" | tee -a "$STATUS"; }

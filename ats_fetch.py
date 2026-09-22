@@ -24,10 +24,14 @@ read.  Corpus census: workable 482 boards, jazzhr 433, teamtailor 112.
                         country, published_on, application_url.
   jazzhr           GET  {slug}.applytojob.com/apply/            (HTML)
                         No JSON anywhere on the board: /apply/jobs.json 404s
-                        and /apply/rss is HTTP 410.  The listing table is
-                        server-rendered with stable resumator-* class names
-                        (one hosted product, one markup), giving title +
-                        department + location per row.  employmentType and
+                        and /apply/rss is HTTP 410.  TWO server-rendered
+                        listing shapes, not one — the "one hosted product, one
+                        markup" assumption written here originally is what let
+                        96.8% of this family go out with no location for months.
+                        The legacy resumator-* table (_JZ_ROW_RX) survives on
+                        ~60 boards; the rest serve a list-group-item card
+                        (_JZ_CARD_RX).  Both give title + department +
+                        location per row, on the listing page, free.  employmentType and
                         datePosted live only in the per-job JobPosting
                         ld+json, so details are fetched per job, capped at
                         JZ_DETAIL_CAP and skippable with JZ_NO_DETAIL=1.
@@ -44,6 +48,7 @@ Threaded (WORKERS), resumable via ats_fetch_state.json (per platform+slug),
 one normalized JSONL per platform in contract_norm/.
 """
 import concurrent.futures as cf
+import csv
 import datetime
 import html
 import json
@@ -300,6 +305,76 @@ _counts = {}
 _failed_now = set()     # boards that failed in THIS run (drives the exit code)
 _outcomes = {}          # board key -> ok | gone | empty | err  (this run)
 _authoritative = {}     # platform -> {slug} whose rows this run may replace
+
+# ---- delta-only detail fetching (jazzhr, bamboohr) -------------------------
+# datePosted lives ONLY in the per-job payload for both platforms, so a date
+# costs one extra request per posting.  Both all-or-nothing settings are wrong:
+# fetching every one is ruinous (138,829 jazzhr rows is ~6.4h at 6 rps, which is
+# why run_all pinned JZ_NO_DETAIL=1), and fetching none is what that produced --
+# 1.8% of jazzhr rows and 0.7% of bamboohr's carry a date.  Those are the two
+# LARGEST board inventories in the pipeline (bamboohr 24,254 boards, jazzhr
+# 14,830) and triage/lanes.py:441 sorts undated rows last in every lane, so
+# ~229k rows exist and are unreachable in practice.
+#
+# Delta-only makes the steady state cheap: a posting already dated in a previous
+# generation is never re-fetched, so only genuinely new postings cost a request
+# (~5k/run, ~14 min).  ATS_DETAIL_BUDGET paces the one-time backfill across runs
+# rather than spending six hours in one step -- at the default that is ~17 runs
+# to date the existing corpus, and the budget is a hard ceiling per RUN, not per
+# board, so it cannot be blown by one enormous employer.
+DETAIL_BUDGET = int(os.environ.get("ATS_DETAIL_BUDGET") or 8000)
+_detail_spent = {"n": 0, "skipped_known": 0, "over_budget": 0}
+_dated = set()          # (platform, board, job_id) that already carry a date
+
+
+def _load_dated(platforms):
+    """Index every (platform, board, job_id) that already carries a date.
+
+    Read from the LIVE jsonl, which at this point is the previous generation --
+    merge_generation has not run yet.  A row with a blank posted is deliberately
+    NOT indexed, so it stays eligible and the backfill converges.
+    """
+    for plat in platforms:
+        path = _live(plat)
+        if not os.path.exists(path):
+            continue
+        n = 0
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if not (d.get("posted") or "").strip():
+                    continue
+                jid = d.get("job_id") or ""
+                if jid:
+                    _dated.add((plat, d.get("board") or "", str(jid)))
+                    n += 1
+        print(f"  {plat}: {n:,} posting(s) already dated — delta-only detail",
+              flush=True)
+
+
+def _need_detail(platform, board, job_id):
+    """True when this posting has no date yet AND the run can still afford one.
+
+    Counts the budget at the point of DECISION, under the shared lock, because
+    the fetchers are threaded (WORKERS defaults to 320) and an unsynchronised
+    counter would overshoot by roughly the worker count.
+    """
+    if not job_id:
+        return False
+    if (platform, board, str(job_id)) in _dated:
+        _detail_spent["skipped_known"] += 1
+        return False
+    with _lock:
+        if _detail_spent["n"] >= DETAIL_BUDGET:
+            _detail_spent["over_budget"] += 1
+            return False
+        _detail_spent["n"] += 1
+    return True
+
+
 _collapsed = []         # (key, rows_before, rows_now) held back for a re-check
 _held = {}              # platform -> {slug} whose rows THIS RUN are distrusted
 _visited = set()        # in-process re-entry guard (see work())
@@ -371,10 +446,44 @@ def throttle(platform):
         time.sleep(min(wait, 5) if wait > 0 else 0)
 
 
+# The 429 response, rebuilt 2026-09-16 after measuring what the old one cost.
+#
+# It used to be a 20-second PLATFORM-WIDE pause plus a ratchet capped at 0.5s.
+# Both halves were wrong, and together they are where workable's throughput
+# went -- not to the host.
+#
+#   * throttle() blocks EVERY worker on a platform while _pause_until is in the
+#     future, so ONE 429 on ONE board stopped all four workers for 20 seconds.
+#   * the ratchet was INERT at the configured rate.  run_all passes
+#     ATS_RPS=workable:2, so _interval starts at 1/2 = 0.5s, which IS the old
+#     cap -- min(0.5 * 1.5, 0.5) == 0.5.  speed_up's floor is 1.0/RPS = 0.5
+#     too.  The interval could never move in either direction.
+#
+# So a 429 bought 20 seconds of global silence and changed the sustained rate
+# by exactly nothing.  Reconstructed from logs/run_all_summary.json and the
+# per-run logs: 715 boards x 0.5s = 358s of bucket-active time inside an
+# 1,820s run, i.e. 80% of the run was self-imposed blackout, and 75-85% across
+# all 20 logged runs.  Measured against a host that answers in 59ms at p50
+# (30 serial requests, max 177ms).  That is also why raising the budget 30 ->
+# 90 min made throughput FALL from ~26 to 7.9 boards/min: more time meant more
+# 429s meant more blackout, while the rate that provoked them never changed.
+#
+# The replacement is an ordinary control loop: a SHORT pause to let a burst
+# clear, and a ratchet that can actually reduce the sustained rate, with
+# speed_up walking it back after 40 clean responses.  Recovery stays slower
+# than backoff (0.9x per 40 clean vs 1.5x per 429), so a host that is genuinely
+# refusing still wins the argument.
+PAUSE_S = float(os.environ.get("ATS_429_PAUSE") or 2.0)
+# Must be comfortably ABOVE every platform's configured interval or the ratchet
+# is inert again -- that is the bug this replaces, and it is easy to reintroduce
+# by lowering this to something that looks tidy.
+INTERVAL_CAP = float(os.environ.get("ATS_INTERVAL_CAP") or 4.0)
+
+
 def slow_down(platform):
     with _rate_lock:
-        _pause_until[platform] = time.time() + 20
-        _interval[platform] = min(_interval[platform] * 1.5, 0.5)
+        _pause_until[platform] = time.time() + PAUSE_S
+        _interval[platform] = min(_interval[platform] * 1.5, INTERVAL_CAP)
         _n429[platform] = _n429.get(platform, 0) + 1
 
 
@@ -630,6 +739,16 @@ def f_recruitee(s, slug):
             posted=cc.ymd(iso=o.get("published_at")
                           or o.get("created_at")),
             apply_url=o.get("careers_apply_url") or o.get("careers_url") or "",
+            # careers_apply_url is the tenant's CUSTOM domain and is the only
+            # URL the API offers -- but a tenant can retire that domain's
+            # careers section while leaving the board published, which is a
+            # 404 on the one link the row carries.  The Recruitee-hosted twin
+            # exists for as long as status == "published" and serves the same
+            # form, so record it as the fallback rather than trusting a host
+            # we do not control.  Built from o["slug"], not parsed back out of
+            # careers_apply_url: the custom domain is free to use any path.
+            job_url=(f"https://{slug}.recruitee.com/o/{o['slug']}/c/new"
+                     if o.get("slug") else ""),
             job_id=o.get("id"), board=slug,
             board_url=f"https://{slug}.recruitee.com"))
     return out
@@ -686,6 +805,61 @@ def _bh_detail(s, slug, jid):
     return cc.ymd(iso=jo.get("datePosted"))
 
 
+def _bh_place(r):
+    """(location, city, state, country) out of a /careers/list row.
+
+    NOT `r.get("atsLocation") or r.get("location")`.  That was the bug: on most
+    boards atsLocation is {"country":null,"state":null,"province":null,
+    "city":null} — a NON-EMPTY dict, therefore TRUTHY — so `or` never fell
+    through to `location`, and the join over its all-None values produced "".
+    The real place was sitting unread in the very next key.
+
+    Measured on the 2026-08-24 crawl: 66,751 of 75,690 rows (88.2%) came out
+    with no geography at all, across 9,573 boards, while 2,576 boards worked.
+    The 2,576 are exactly the ones whose atsLocation IS populated — which is
+    why this looked like sparse employer data rather than a bug for so long.
+
+    So: prefer whichever dict actually YIELDS something, atsLocation first
+    (it is the structured one, and carries country where `location` does not).
+    Emitting city/state/country as their own fields is the other half of the
+    fix — remote_us_classify.us_basis proves the US from a country/state pair
+    directly, and only falls back to parsing free text when it has to.
+    """
+    best = {}
+    for key in ("atsLocation", "location"):
+        v = r.get(key)
+        if not isinstance(v, dict):
+            continue
+        got = {k: str(val).strip() for k, val in v.items()
+               if val not in (None, "") and str(val).strip()}
+        if got and not best:
+            best = got
+        elif got:
+            # Fill only the holes: atsLocation wins where both speak.
+            for k, val in got.items():
+                best.setdefault(k, val)
+    if not best:
+        v = r.get("atsLocation") or r.get("location") or ""
+        return (str(v).strip() if isinstance(v, str) else ""), "", "", ""
+    city = best.get("city", "")
+    state = best.get("state") or best.get("province") or ""
+    country = best.get("country", "")
+    # Narrowest-first ("Marion, Iowa"), NOT the widest-first string bamboohr's
+    # own working boards used to emit ("United States, Iowa, Marion").  Two
+    # reasons.  The legacy order cannot be preserved anyway — those boards now
+    # return a null atsLocation, so the country is gone from the live payload
+    # whatever this does.  And `location` is read and displayed ACROSS sources,
+    # where "Marion, Iowa" is the universal form; matching the rest of the
+    # corpus beats matching this family's own history.
+    #
+    # Order is free here, which is the only reason there is a choice to make:
+    # us_basis proves the US off the `state` FIELD, ajb.regions_of matches the
+    # whole string, and local_build.where_fit segments on [;|] rather than on
+    # commas, so town and state marker stay in one segment either way.
+    loc = ", ".join(p for p in (city, state, country) if p)
+    return loc, city, state, country
+
+
 def f_bamboohr(s, slug):
     d = gj(s, "bamboohr", f"https://{slug}.bamboohr.com/careers/list")
     out = []
@@ -695,11 +869,9 @@ def f_bamboohr(s, slug):
                          r.get("jobOpeningName"))
         if not et:
             continue
-        loc = r.get("atsLocation") or r.get("location") or ""
-        if isinstance(loc, dict):
-            loc = ", ".join(str(v) for v in loc.values() if v)
+        loc, city, state, country = _bh_place(r)
         posted = ""
-        if BH_DETAIL and n_det < BH_DETAIL_CAP and r.get("id"):
+        if BH_DETAIL and _need_detail("bamboohr", slug, r.get("id")):
             posted = _bh_detail(s, slug, r.get("id"))
             n_det += 1
         out.append(cc.row(
@@ -709,7 +881,17 @@ def f_bamboohr(s, slug):
             title=r.get("jobOpeningName"), employment_type=et,
             work_mode=cc.work_mode(r.get("isRemote"),
                                    text=str(r.get("locationType") or "")),
-            location=loc, remote=bool(r.get("isRemote")),
+            location=loc, city=city, state=state, country=country,
+            # `remote` stays False-by-absence, and that is a decision, not an
+            # oversight.  isRemote is null on all 567 jobs sampled across 40
+            # boards (2026-08-25), and locationType — its only candidate stand-in
+            # — takes three values (0:341, 1:96, 2:130) none of which correlates
+            # with "remote" appearing in the location text.  So which value means
+            # remote is UNKNOWN, and guessing is not free: geo_of runs its remote
+            # leg before the onsite one, so a wrong flag admits foreign rows on
+            # the strength of a made-up signal.  The Toronto board in the fixture
+            # set is exactly what that would let through.
+            remote=bool(r.get("isRemote")),
             apply_url=f"https://{slug}.bamboohr.com/careers/{r.get('id')}",
             job_id=r.get("id"), board=slug,
             board_url=f"https://{slug}.bamboohr.com/careers"))
@@ -717,9 +899,20 @@ def f_bamboohr(s, slug):
 
 
 def f_workable(s, slug):
+    # No ?details=true.  It adds exactly one field per job -- `description` --
+    # which this function never reads and contract_common.COLUMNS has no column
+    # for, so it was downloaded and discarded on every job of every board.
+    # Measured 2026-09-16 on carefound-home-care (45 jobs): 7,033 -> 1,658 wire
+    # bytes, 4.2x, with the parsed rows byte-identical on every field this
+    # function touches and `description` the ONLY key that differs.  Larger
+    # boards are worse: pavago (2,159 jobs) is 27.8x.
+    #
+    # Be honest about what this does NOT do: the host sends
+    # cf-cache-status: DYNAMIC, so every byte is origin work, but a few MB
+    # across a multi-hour drain is far too little traffic to be what the rate
+    # limiter reacts to.  This is free and lossless, not a fix for the 429s.
     d = gj(s, "workable",
-           f"https://apply.workable.com/api/v1/widget/accounts/{slug}"
-           f"?details=true")
+           f"https://apply.workable.com/api/v1/widget/accounts/{slug}")
     company = d.get("name") or slug
     out = []
     for j in (d.get("jobs") or []):
@@ -767,6 +960,37 @@ _JZ_ROW_RX = re.compile(
     r'.*?'
     r'<td[^>]*class="[^"]*resumator-job-location-column[^"]*"[^>]*>(.*?)</td>',
     re.S | re.I)
+# The MODERN listing theme, and the reason it exists.  JazzHR now serves most
+# boards as a <ul> of cards instead of the resumator-* <table> above, and
+# _JZ_ROW_RX matches NOTHING on those pages.  Measured on the 2026-08-24 crawl
+# that was 4,833 of 4,893 boards: rows still arrived (via _JZ_LINK_RX, below)
+# but with no location at all, so 96.8% of the family — 112,048 rows — could
+# never clear any geo gate and was invisible to triage regardless of content.
+#
+# The card carries location on the LISTING page, so this costs zero extra
+# requests.  Both facts are on <li> elements distinguished only by their icon:
+#
+#   <li class="list-group-item">
+#     <h3 class='list-group-item-heading'><a href="URL">TITLE</a></h3>
+#     <ul class='list-inline list-group-item-text'>
+#       <li><i class='fa fa-map-marker'></i>Bentonville, AR</li>
+#       <li><i class='fa fa-sitemap'></i>Central 1002</li>
+#
+# Anchored on the fa-* icon class rather than on <li> ORDER: a board with no
+# department emits only the map-marker item, and positional matching would then
+# read its location as a department on exactly the rows that have the least
+# data to spare.  Quotes are ['"] throughout because JazzHR emits both.
+_JZ_CARD_RX = re.compile(
+    r'<li[^>]*class=[\'"][^\'"]*list-group-item[^\'"]*[\'"][^>]*>(.*?)</ul>',
+    re.S | re.I)
+_JZ_CARD_LINK_RX = re.compile(
+    r'<h3[^>]*class=[\'"][^\'"]*list-group-item-heading[^\'"]*[\'"][^>]*>\s*'
+    r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', re.S | re.I)
+_JZ_CARD_LOC_RX = re.compile(
+    r'<li[^>]*>\s*<i[^>]*fa-map-marker[^>]*>\s*</i>(.*?)</li>', re.S | re.I)
+_JZ_CARD_DEPT_RX = re.compile(
+    r'<li[^>]*>\s*<i[^>]*fa-sitemap[^>]*>\s*</i>(.*?)</li>', re.S | re.I)
+
 _JZ_LINK_RX = re.compile(
     r'href="(https?://[^"]*?applytojob\.com/apply/([A-Za-z0-9]{6,})/[^"]*)"'
     r'[^>]*>(.*?)</a>', re.S | re.I)
@@ -827,9 +1051,27 @@ def f_jazzhr(s, slug):
             seen.setdefault(url.strip(), (t, _squash(_text(dept)),
                                           _squash(_text(loc))))
     if not seen:
-        # Board rendered without the listing table (older theme, or a single
-        # posting).  Fall back to the apply links themselves so the board is
-        # not silently recorded as empty.
+        # The modern card theme.  Tried BEFORE the bare-link fallback because
+        # it carries location and department; the fallback carries neither, and
+        # silently preferring it is what blinded this family (see _JZ_CARD_RX).
+        for card in _JZ_CARD_RX.findall(body):
+            m = _JZ_CARD_LINK_RX.search(card)
+            if not m:
+                continue
+            t = _squash(_text(m.group(2)))
+            if not t:
+                continue
+            mloc = _JZ_CARD_LOC_RX.search(card)
+            mdept = _JZ_CARD_DEPT_RX.search(card)
+            seen.setdefault(m.group(1).strip(),
+                            (t, _squash(_text(mdept.group(1))) if mdept else "",
+                             _squash(_text(mloc.group(1))) if mloc else ""))
+    if not seen:
+        # Board rendered without either listing shape (a single posting, or a
+        # theme we have not seen).  Fall back to the apply links themselves so
+        # the board is not silently recorded as empty.  These rows carry NO
+        # location — they are the ones the no-geo census in triage_gap.py
+        # counts, and a rising count here means a third theme has shipped.
         for url, _code, title in _JZ_LINK_RX.findall(body):
             t = _squash(_text(title))
             if t:
@@ -847,7 +1089,11 @@ def f_jazzhr(s, slug):
         if mm:
             code = mm.group(1)
         det = {}
-        if not JZ_NO_DETAIL and i < JZ_DETAIL_CAP:
+        # `i < JZ_DETAIL_CAP` used to cap by POSITION in the board, which spent
+        # the allowance on the first 80 postings of every board and re-fetched
+        # the same already-dated ones every run.  Delta-only spends it on
+        # postings that have no date yet, wherever they sit.
+        if not JZ_NO_DETAIL and _need_detail("jazzhr", slug, code):
             det = _jz_detail(s, url)
         # (none) is JazzHR's literal placeholder for an unset department.
         if dept.lower() in ("(none)", "none"):
@@ -1122,9 +1368,14 @@ def load_slugs():
     would just get them clobbered on the next run.
     """
     merged = {}
+    # smoke_* sidecars are test artifacts (SMOKE=<n> prefixes every file it
+    # writes) and must never feed a production queue: smoke_wayback_ats_
+    # slugs.json was being read here, harmless only because its 430 slugs
+    # were rippling, which is not in PLATFORMS.
     paths = [SLUGS] + sorted(
         q for q in glob.glob(os.path.join(BASE, "*_ats_slugs.json"))
-        if os.path.abspath(q) != os.path.abspath(SLUGS))
+        if os.path.abspath(q) != os.path.abspath(SLUGS)
+        and not os.path.basename(q).startswith("smoke_"))
     for path in paths:
         if not os.path.exists(path):
             continue
@@ -1396,12 +1647,37 @@ def merge_generation():
 
         if live_n and shrink > MAX_SHRINK:
             os.remove(tmp)
+            # Print the SAME accounting a successful merge prints.  It is
+            # already computed above and was being discarded here, which is why
+            # bamboohr and jazzhr refused on 2026-08-26 with nothing in the log
+            # to say whether the cause was a short fetch, a delisting wave, or
+            # a bad live_n -- the one line that answers it existed and was
+            # thrown away.  A refusal is the case that MOST needs the numbers.
             print(f"  !! REFUSED {plat}: would lose {shrink * 100:.1f}% of rows "
-                  f"(cap {MAX_SHRINK * 100:.0f}%) — appending instead", flush=True)
+                  f"(cap {MAX_SHRINK * 100:.0f}%) — appending instead",
+                  flush=True)
+            print(f"     would have been: {msg.strip()}", flush=True)
+            # A one-off refusal is a bad night; a STREAK means this platform's
+            # delisting has silently stopped reconciling and the live file is
+            # only ever growing.  Counted in the ledger so the next run can say
+            # so out loud instead of repeating an isolated-looking warning.
+            with _lock:
+                rm = al.meta(_ledger).setdefault("refused", {})
+                r = rm.setdefault(plat, {})
+                r["streak"] = int(r.get("streak") or 0) + 1
+                r["last"] = RUN_DATE
+                r["shrink"] = round(shrink, 4)
+                r["live_n"], r["stage_n"] = live_n, stage_n
+                if r["streak"] > 1:
+                    print(f"     !! {plat} has now refused {r['streak']} runs "
+                          f"in a row — delisting is not reconciling",
+                          flush=True)
             if have_stage:
                 _append(stage, live)
                 os.remove(stage)
             continue
+        with _lock:
+            al.meta(_ledger).get("refused", {}).pop(plat, None)
 
         if STAGE_ONLY:
             os.remove(tmp)
@@ -1486,11 +1762,62 @@ def build_queue(slugs):
     # so hot drains first and the budget truncates the COLD tail — which is
     # exactly the population worth dropping.  Shuffling happens WITHIN a tier so
     # the platform interleaving that random.shuffle was added for is preserved.
+    # Platforms whose 'new' tier is ordered by the live-rate prior rather than
+    # left to chance.  Comma list; empty disables it entirely.
+    prio_plats = [x.strip() for x in
+                  (os.environ.get("ATS_PRIORITY") or "workable").split(",")
+                  if x.strip()]
+    prio = {pl: _priority(pl) for pl in prio_plats}
     out = []
     for tier in ("hot", "new", "warm", "cold"):
         chunk = [j for j in jobs if j[2] == tier]
         random.shuffle(chunk)
+        if tier == "new" and any(prio.values()):
+            # Shuffle FIRST, then stable-sort by priority.  That keeps the
+            # random order inside each band, so the platform interleaving the
+            # shuffle exists for survives -- sorting a sorted list would hand
+            # one platform the whole head of the queue.
+            chunk.sort(key=lambda j: prio.get(j[0], {}).get(j[1].lower(), 0))
         out += chunk
+    return out
+
+
+def _priority(platform):
+    """slug -> 0 (fetch first) or 1, from the candidate file's `sources` column.
+
+    Only for platforms named in ATS_PRIORITY.  Everything else keeps the plain
+    shuffle, so this cannot reorder a platform nobody measured.
+
+    WHY, measured 2026-09-16 on workable against ats_workable_yield_ledger.json
+    joined to workable_candidates.csv:
+
+        slug carries a corpus tag   probed  2,822   live 2,754 (97.6%)  29.4 rows/probed
+        wayback-only                probed 10,241   live   296 ( 2.9%)   0.4 rows/probed
+
+    Of 9,121 unreached slugs, 1,298 are corpus-tagged and 7,823 are
+    wayback-only, so 92% of the remaining ROWS sit in 14% of the remaining
+    BOARDS.  A corpus tag means the slug was seen in a live posting somewhere;
+    a wayback-only slug is an archive artifact that may never have been a board.
+
+    build_queue shuffled the whole 'new' tier at random, so a 30-minute run
+    spent ~86% of its ~715 boards on slugs with a 2.9% chance of carrying
+    anything, and the near-certain ones waited for run #12.  This does not make
+    the fetcher faster; it changes WHICH boards a truncated budget reaches.
+    """
+    path = os.path.join(BASE, f"{platform}_candidates.csv")
+    if not os.path.exists(path):
+        return {}
+    out = {}
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                slug = (r.get("slug") or r.get("token") or "").strip().lower()
+                if not slug:
+                    continue
+                src = r.get("sources") or ""
+                out[slug] = 0 if ("alljobs" in src or "getro" in src) else 1
+    except OSError:
+        return {}
     return out
 
 
@@ -1524,15 +1851,34 @@ def main():
     n_jz = sum(1 for p, _, _t in jobs if p == "jazzhr")
     if JZ_FORCE_DETAIL:
         JZ_NO_DETAIL = False
-    elif not JZ_NO_DETAIL and n_jz > JZ_DETAIL_MAX_BOARDS:
+    elif not JZ_NO_DETAIL and n_jz > JZ_DETAIL_MAX_BOARDS and not DETAIL_BUDGET:
+        # Only when the run is UNBOUNDED.  This switch exists because detail
+        # used to be capped per BOARD, so a big queue meant unbounded total
+        # cost and the only defence was to turn it off wholesale.  With
+        # ATS_DETAIL_BUDGET set the cost is bounded by the budget no matter how
+        # many boards are queued, so disabling on board count now buys nothing
+        # and costs every date -- jazzhr has 14,830 boards, so this branch fired
+        # on essentially every run and is half of why 98.2% of jazzhr rows carry
+        # no date (run_all's JZ_NO_DETAIL=1 was the other half).
         JZ_NO_DETAIL = True
-        print(f"  jazzhr: {n_jz} boards > {JZ_DETAIL_MAX_BOARDS} — per-job "
-              f"detail fetch DISABLED for this run (rows keep title/location/"
-              f"department, lose posted date + employmentType).  "
-              f"Force with JZ_DETAIL=1.", flush=True)
-    elif not JZ_NO_DETAIL:
-        print(f"  jazzhr: {n_jz} boards — per-job detail fetch enabled",
+        print(f"  jazzhr: {n_jz} boards > {JZ_DETAIL_MAX_BOARDS} and no "
+              f"ATS_DETAIL_BUDGET — per-job detail fetch DISABLED for this run "
+              f"(rows lose posted date, employmentType and the "
+              f"city/state/country TRIPLE; the listing `location` string "
+              f"survives on both board themes).  Force with JZ_DETAIL=1.",
               flush=True)
+    elif not JZ_NO_DETAIL:
+        print(f"  jazzhr: {n_jz} boards — per-job detail fetch enabled "
+              f"(delta-only, budget {DETAIL_BUDGET or 'unbounded'})",
+              flush=True)
+
+    # Index what is already dated, AFTER the switch above has settled so this
+    # is skipped when no detail will be fetched at all.
+    _want_dated = [pl for pl in ("jazzhr", "bamboohr") if pl in PLATFORMS
+                   and ((pl == "jazzhr" and not JZ_NO_DETAIL)
+                        or (pl == "bamboohr" and BH_DETAIL))]
+    if _want_dated:
+        _load_dated(_want_dated)
 
     done = 0
     stopped_early = False
@@ -1574,6 +1920,18 @@ def main():
         al.save(_ledger)    # merge_generation stamps __meta__.prev_gen
     if _n429:
         print(f"  rate-limit backoffs: {_n429}", flush=True)
+    if _detail_spent["n"] or _detail_spent["skipped_known"]:
+        # Say the backfill's remaining depth out loud.  "still undated" is what
+        # tells you whether this is converging or stuck; the budget is a per-run
+        # ceiling, so a flat number across runs means the cap is binding and
+        # ATS_DETAIL_BUDGET should rise.
+        print(f"  detail (delta-only): {_detail_spent['n']:,} fetched, "
+              f"{_detail_spent['skipped_known']:,} already dated, "
+              f"{_detail_spent['over_budget']:,} deferred to the next run "
+              f"(ATS_DETAIL_BUDGET={DETAIL_BUDGET})", flush=True)
+        if _detail_spent["over_budget"]:
+            print("  INCOMPLETE: postings still undated — they stay queued "
+                  "for the next run", flush=True)
     print(f"DONE ats_fetch. kept per platform: {_counts}", flush=True)
     if stopped_early:
         # Boards not reached are left ABSENT from the state file, never marked

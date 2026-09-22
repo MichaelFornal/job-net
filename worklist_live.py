@@ -31,7 +31,7 @@ MATCH VISIBLE TEXT, NEVER THE RAW BODY. Both wrong verdicts above came from read
 markup as prose. The same trap caught a jobicy page whose stylesheet defines
 `span.expired-title`. Everything goes through visible_text() now.
 
-Writes worklist_live.json next to the worklist; the worklist builder reads it if present and
+Writes worklist_live.json next to the worklist; apply_worklist.py reads it if present and
 strikes the dead rows out. Read-only against the network -- it never submits anything.
 """
 import concurrent.futures as cf, json, pathlib, re, sqlite3, sys, urllib.request, urllib.error
@@ -109,10 +109,50 @@ def probe(url):
     return "live", f"{n//1000} KB"
 
 
+def _arg(flag, default=None):
+    """The value after `flag` on argv, or `default`.  argparse would be tidier and would
+    also change the meaning of the bare `--all` this script already ships with."""
+    if flag in sys.argv:
+        i = sys.argv.index(flag)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return default
+
+
+def lane_rows(con, key, top):
+    """The top `top` UNDECIDED rows of a triage lane, in the lane's own order.
+
+    Added 2026-08-27 for `fastapply`, whose whole premise is that a slot costs four
+    minutes -- so a dead form is the most expensive thing in it.  The default query below
+    cannot reach these rows: it starts from `decisions`, and a lane is by definition the
+    work that has NOT been decided yet.
+
+    Output goes to <lane>_live.json, never to worklist_live.json.  apply_worklist.py
+    reads that file to strike rows out of the approved queue, and overwriting it with
+    verdicts about a different row set would silently mark the queue's own rows unknown.
+    """
+    sys.path.insert(0, str(HERE / "triage"))
+    import lanes as LN
+    lm = LN.lane_map(21)
+    if key not in lm:
+        sys.exit(f"unknown lane '{key}' -- have: {', '.join(sorted(lm))}")
+    _, sql, params = lm[key]
+    q = LN.queue_sql(sql, "job_key, company, title, apply_url, posted",
+                     order=LN.order_for(key), limit=top)
+    return [dict(r) for r in con.execute(q, params)]
+
+
 def main():
     only_fast = "--all" not in sys.argv
+    lane = _arg("--lane")
+    top = int(_arg("--top", 200))
     con = sqlite3.connect("file:triage.db?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
+    if lane:
+        rows = lane_rows(con, lane, top)
+        out_path = HERE / f"{lane}_live.json"
+        print(f"probing top {len(rows)} of lane '{lane}' -> {out_path.name}")
+        return run(rows, out_path)
     sql = """
       SELECT j.job_key, j.company, j.title, j.apply_url, j.posted
       FROM decisions d JOIN jobs j USING(job_key)
@@ -125,7 +165,7 @@ def main():
         # The set we can actually decide. workday and rippling joined it once their
         # detectors were fixed; icims and smartrecruiters answer with real text.
         # himalayas/jobgether stay excluded by the query above -- they are not
-        # employer forms at all (the worklist builder ranks them last for that reason).
+        # employer forms at all (apply_worklist.tier() ranks them 9 for that reason).
         sql += (" AND (j.apply_url LIKE '%ashbyhq%' OR j.apply_url LIKE '%greenhouse%'"
                 " OR j.apply_url LIKE '%lever.co%' OR j.apply_url LIKE '%myworkdayjobs%'"
                 " OR j.apply_url LIKE '%ats.rippling.com%'"
@@ -133,7 +173,10 @@ def main():
                 " OR j.apply_url LIKE '%smartrecruiters%')")
     rows = [dict(r) for r in con.execute(sql + " ORDER BY j.posted DESC")]
     print(f"probing {len(rows)} rows ({'fast-apply only' if only_fast else 'all'})…")
+    return run(rows, OUT)
 
+
+def run(rows, out_path):
     out = {}
     # modest concurrency: these are a handful of ATS hosts and hammering them is both rude
     # and the fastest way to start getting 429s that look like dead postings
@@ -151,11 +194,11 @@ def main():
             if state == "dead":
                 print(f"    dead  {r['company'][:26]:26} {r['title'][:42]:42} {detail}")
 
-    OUT.write_text(json.dumps(out, indent=1))
+    out_path.write_text(json.dumps(out, indent=1))
     tally = {}
     for v in out.values():
         tally[v["state"]] = tally.get(v["state"], 0) + 1
-    print(f"\n  -> {OUT.name}")
+    print(f"\n  -> {out_path.name}")
     for k in ("live", "dead", "unknown", "blocked"):
         print(f"     {k:8s} {tally.get(k,0)}")
     if tally.get("blocked"):

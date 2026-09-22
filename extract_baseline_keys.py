@@ -107,6 +107,18 @@ def main():
         sys.exit(f"FAIL: wrote {written:,} keys but file has {lines:,} lines")
     print("self-check OK: one line per key, JSON-escaped", flush=True)
 
+    # HARD EXIT.  Everything this script produces is already durable: the file
+    # was os.replace()d into place, re-read to count its lines, and checked.
+    # What remains is CPython tearing down `seen` -- 4.3M interned key strings
+    # -- and on 2026-08-26 that took 25 MINUTES, because the box was deep in
+    # swap and freeing the set had to page every one of them back in.  It ran
+    # at 14% CPU producing nothing while the entire chain waited on it, since
+    # discover_full_chain.sh runs this in front of run_all.  Freeing memory
+    # immediately before exit is work with no consumer; let the OS reclaim it.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+
 
 if __name__ == "__main__":
     main()

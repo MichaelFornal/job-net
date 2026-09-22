@@ -117,6 +117,8 @@ import concurrent.futures as cf
 
 import requests
 
+from datetime import datetime, timezone
+
 import contract_common as cc
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -137,6 +139,21 @@ WORKERS = int(os.environ.get("JG_WORKERS") or 4)
 MAX_MIN = float(os.environ.get("JG_MAX_MIN") or 0)
 LIMIT = int(os.environ.get("JG_LIMIT") or 0)   # cap partitions per phase (dev)
 D_MAX = int(os.environ.get("JG_D_MAX") or 40)  # discovery sweeps per run
+# REFRESH TTL, added 2026-09-04.  "done" was an UNTIMESTAMPED terminal marker,
+# so once a company partition was crawled it was never crawled again: this
+# pipe wrote 0 rows on 11 of its last 14 runs while still costing up to 90
+# minutes of budget.  themuse had the identical completed-watermark bug and
+# was fixed; its twin was not.  jobgether is also one of the `remote` family
+# that run_all deliberately never state_refreshes -- correctly, because this
+# file also holds the slug_ids map that costs ~8,977s to rebuild -- so the
+# expiry has to live here, keyed per company, rather than in rotate_family.
+#
+# A FIFTH of the expired partitions per run, not a third: this host paces with
+# Cloudflare and its throughput degrades within a session, so a big re-queue
+# buys 429s rather than rows.  Five buckets also means the whole corpus cycles
+# in five runs, which is inside the TTL.
+TTL_DAYS = float(os.environ.get("JG_TTL_DAYS") or 7)
+TTL_SHARDS = int(os.environ.get("JG_TTL_SHARDS") or 5)
 PHASES = [p.strip() for p in (os.environ.get("JG_ONLY") or "a,b,d").split(",")
           if p.strip()]
 TRIES = 6
@@ -582,8 +599,11 @@ def do_company(out, key, cid):
     if total > WINDOW:
         got += drill(out, cid, seen_jr)
     with _lock:
+        # `at` is what makes "done" expirable.  An undated done marker is a
+        # permanent veto, which is exactly how this pipe froze.
         _state["companies_by_id"][cid] = {"status": "done", "key": key,
-                                          "total": total, "rows": got}
+                                          "total": total, "rows": got,
+                                          "at": _today()}
     return got
 
 
@@ -683,10 +703,42 @@ def phase_b(pool, out, rounds=6):
             return
 
 
+def _today():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _expired(cid, v):
+    """Is this 'done' partition old enough, and in this run's shard, to redo?
+
+    An entry written before the TTL existed has no `at` at all; those are the
+    frozen ones, so they are the whole point and count as expired.  Sharding is
+    on the company id so a partition lands in the same bucket every run, and
+    the bucket rotates with the date -- five consecutive runs therefore cover
+    the corpus exactly once, with no run paying for more than a fifth of it.
+    """
+    if not TTL_DAYS:
+        return False
+    at = v.get("at") or ""
+    try:
+        age = (datetime.now(timezone.utc)
+               - datetime.strptime(at, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+               ).days
+    except ValueError:
+        age = 10 ** 6          # never stamped: frozen since before the TTL
+    if age < TTL_DAYS:
+        return False
+    day = datetime.now(timezone.utc).toordinal()
+    try:
+        bucket = int(cid) % TTL_SHARDS
+    except (TypeError, ValueError):
+        bucket = sum(map(ord, str(cid))) % TTL_SHARDS
+    return bucket == day % TTL_SHARDS
+
+
 def _phase_b_round(pool, out, rnd):
     with _lock:
         todo = [(cid, dict(v)) for cid, v in _state["companies_by_id"].items()
-                if v.get("status") != "done"]
+                if v.get("status") != "done" or _expired(cid, v)]
     if LIMIT:
         todo = todo[:LIMIT]
     print("phase B round %d: %d company partitions known, %d to crawl"

@@ -67,10 +67,19 @@ def ledger(con, ref):
 
 
 def job_rows(con, ref):
-    """Every `jobs` row wearing this ref, live first, newest-seen first."""
+    """Every `jobs` row wearing this ref, live first, newest-seen first.
+
+    `AND ref > 0` is not a filter, it is the INDEX HINT, and without it this SCANS all
+    293k rows.  `idx_jobs_ref` is deliberately partial (`WHERE ref > 0`, since ref 0 means
+    "not minted yet" and nobody looks one up), and SQLite will only use a partial index
+    when the query's own WHERE terms imply its predicate -- `ref = ?` is a bound
+    parameter, so at prepare time nothing proves it is positive, and the index sat unused
+    from the day it was written.  Measured 2026-08-26: 2.128s -> 0.001s.  It is also
+    correct on its own terms: J0 is not a reference number.
+    """
     return con.execute(
-        "SELECT * FROM jobs WHERE ref = ? ORDER BY live DESC, last_seen DESC",
-        (ref,)).fetchall()
+        "SELECT * FROM jobs WHERE ref = ? AND ref > 0 "
+        "ORDER BY live DESC, last_seen DESC", (ref,)).fetchall()
 
 
 def corpus_rows(con, ref_key, corpus=None):

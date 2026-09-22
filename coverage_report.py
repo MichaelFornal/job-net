@@ -44,7 +44,7 @@ import os
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 NORM = os.path.join(BASE, "contract_norm")
@@ -196,8 +196,15 @@ FAMS += [
     # instead of six hard-coded hosts, so it has a real known-vs-reached number
     # for the first time.  Without these it reported blank and was invisible in
     # the coverage diff.
+    # phenom_candidates.csv WAS in `lists` and must not be.  It is a candidate
+    # POOL -- 4,255 mined hosts awaiting proof -- not a board list.  Counting it
+    # as the denominator reported phenom at 131/4,255 = 3.1% with "4,121
+    # unreached", which read as the worst coverage hole in the repo and was
+    # steering the discovery queue toward a gap that does not exist.  Against
+    # the boards that actually proved phenom, coverage is 131/132 = 99.2%.
+    # An unproven candidate is not an unreached board.
     Fam("phenom", state="phenom_fetch_state.json",
-        lists=("tenants/phenom.csv", "phenom_candidates.csv"),
+        lists=("tenants/phenom.csv",),
         sources=("phenom",), jsonls=("contract_norm/phenom_all.jsonl",)),
 ]
 
@@ -289,6 +296,64 @@ def state_counts(root, fam):
         return (0, 0, 0)
     dead = sum(1 for v in d.values() if is_dead(v))
     return (len(d) - dead, dead, len(d))
+
+
+# A family is stale when its NEWEST per-board fetch is older than this.  Days,
+# not runs: a family that no longer runs produces no runs to count.
+STALE_DAYS = int(os.environ.get("COVERAGE_STALE_DAYS") or 3)
+
+
+def _age(day):
+    """Whole days between an ISO date and today, or "" if unparseable."""
+    try:
+        y, m, d = (int(x) for x in
+                   str(day).rstrip("*").split("-")[:3])
+        return (date.today() - date(y, m, d)).days
+    except (ValueError, TypeError):
+        return ""
+
+
+def state_freshness(root, fam):
+    """(newest 'at' date, boards touched in the last STALE_DAYS) or None.
+
+    Coverage answers "was this board EVER reached" and that is not the same
+    question as "is this family still working".  Measured 2026-09-16:
+    cornerstone reported 100.0% coverage (63 of 63 boards) while 61 of its 63
+    state keys were dated 2026-08-20 -- 27 days untouched -- because its state
+    was frozen and every run printed "0 to fetch" and exited 0.  A family can
+    be fully covered and completely dead at the same time, and until this
+    column existed the report could not say so.
+    """
+    if not fam.state:
+        return None
+    d = read_json(root, fam.state)
+    if d is None:
+        return None
+    if fam.key_prefix:
+        d = {k: v for k, v in d.items() if k.startswith(fam.key_prefix)}
+    ats = [(v or {}).get("at") for v in d.values() if isinstance(v, dict)]
+    ats = [a for a in ats if a]
+    cut = (date.today() - timedelta(days=STALE_DAYS)).isoformat()
+    if ats:
+        return (max(ats), sum(1 for a in ats if a >= cut))
+    # Most state files do not carry a per-board "at" -- 30 of the 41 families
+    # store a bare status string, or a dict with a different shape.  Fall back
+    # to the mtime of the family's OUTPUT, never the state file's: a run that
+    # fetches nothing still rewrites its state at exit, so state mtime is
+    # exactly the false-freshness trap that hid the frozen families.  The
+    # output only moves when rows are written.
+    newest = ""
+    for rel in fam.jsonls:
+        try:
+            m = os.path.getmtime(os.path.join(root, rel))
+        except OSError:
+            continue
+        iso = datetime.fromtimestamp(m, timezone.utc).strftime("%Y-%m-%d")
+        if iso > newest:
+            newest = iso
+    if not newest:
+        return None
+    return (newest + "*", "")   # * marks an output-mtime fallback
 
 
 def _fam_from_path(rel):
@@ -387,6 +452,7 @@ def main():
     recs = []
     for fam in FAMS:
         sc = state_counts(root, fam)
+        fr = state_freshness(root, fam)
         known = boards_known(root, fam, wayback, getro,
                              state_total=sc[2] if sc else 0)
         reached, dead, total = sc if sc else ("", "", "")
@@ -411,6 +477,9 @@ def main():
             pct_surviving=(f"{100.0 * inmaster / raw:.1f}"
                            if raw and inmaster else ""),
             covered_by=fam.covered_by or "",
+            last_fetch=(fr[0] if fr else ""),
+            fresh_boards=(fr[1] if fr else ""),
+            stale_days=(_age(fr[0]) if fr else ""),
             note=fam.note))
 
     for name, paths in sorted(ROWS_ONLY.items()):
@@ -420,6 +489,7 @@ def main():
             boards_dead="", boards_unreached="", pct_reached="",
             rows_raw=raw, rows_in_master=master[name] if master else "",
             pct_surviving="", covered_by="",
+            last_fetch="", fresh_boards="", stale_days="",
             note="no per-board state (cursor/partition only)"))
 
     # covered_by is emitted so a consumer can sum without double-counting.  It
@@ -427,7 +497,8 @@ def main():
     # including the site -- counted ashby twice.
     cols = ["family", "boards_known", "boards_reached", "boards_dead",
             "boards_unreached", "pct_reached", "rows_raw", "rows_in_master",
-            "pct_surviving", "covered_by", "note"]
+            "pct_surviving", "covered_by", "last_fetch", "fresh_boards",
+            "stale_days", "note"]
     with open(out, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
@@ -467,6 +538,26 @@ def main():
         print(f"  (deduplicated: {', '.join(covered)} excluded, "
               f"already reached by another pipe)")
     print(f"  boards reached {tr} across {fams_counted} families")
+
+    # STALE: covered but not WORKING.  The percentage above answers "was this
+    # board ever reached"; it cannot answer "is this family still running", and
+    # the difference is not academic -- on 2026-09-16 cornerstone reported
+    # 100.0% (63 of 63) while 61 of its 63 state keys were dated 2026-08-20,
+    # 27 days untouched, because its state was frozen and every run printed
+    # "0 to fetch" and exited 0.  A * marks a date taken from the family's
+    # OUTPUT mtime because its state carries no per-board timestamp.
+    stale = []
+    for r in recs:
+        age = r.get("stale_days")
+        if isinstance(age, int) and age > STALE_DAYS:
+            stale.append((age, r["family"], r["last_fetch"], r["note"]))
+    if stale:
+        stale.sort(reverse=True)
+        print(f"\n  STALE (nothing written in over {STALE_DAYS} days — "
+              f"coverage says reached, not recently):")
+        for age, name, last, note in stale:
+            why = f"  — {note[:58]}" if note else ""
+            print(f"    {name:17} {last:13} {age:>4}d{why}")
 
     # Sources that are listed as inputs but contribute nothing.  A listed-and-
     # empty source is invisible in every other report: the build still prints a

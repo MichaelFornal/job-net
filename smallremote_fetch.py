@@ -93,6 +93,10 @@ OUT = os.path.join(cc.NORM_DIR, "smallremote.jsonl")
 STATE_JSON = os.path.join(BASE, "smallremote_fetch_state.json")
 
 FORCE = os.environ.get("SMALLREMOTE_FORCE") == "1"
+# A "done" watermark with no expiry is a frozen pipe: every source here reported
+# `already done` from 2026-08-14/08-21 and the fetch wrote 0 rows in 2s for ten
+# days running.  Re-crawl a source once its banked pass is this old.
+MAX_AGE_DAYS = float(os.environ.get("SMALLREMOTE_MAX_AGE_DAYS") or 7)
 LIMIT = int(os.environ.get("SMALLREMOTE_LIMIT") or 0)   # cap per-job-page crawls
 TODAY = datetime.now(timezone.utc).date()
 
@@ -1050,6 +1054,57 @@ def do_justremote(out, st):
 
 
 # ==========================================================================
+def stale_reason(ent):
+    """None if this source's banked crawl is still good, else why it re-runs."""
+    if FORCE:
+        return "SMALLREMOTE_FORCE=1"
+    if ent.get("status") != "done":
+        return "status=%s" % (ent.get("status") or "new")
+    at = ent.get("at")
+    if not at:
+        return "no completion date"
+    try:
+        then = datetime.strptime(at, "%Y-%m-%d").date()
+    except ValueError:
+        return "unparsable completion date %r" % at
+    age = (TODAY - then).days
+    if age >= MAX_AGE_DAYS:
+        return "%d days old (max %g)" % (age, MAX_AGE_DAYS)
+    return None
+
+
+def carry_forward(run_now):
+    """Rewrite OUT keeping only rows from sources we are NOT re-fetching.
+
+    cc.Writer opens "a", so re-running a source without this would append a
+    second copy of it.  run_all used to solve that by truncating the whole file
+    in a pre hook -- correct only if every source really is re-fetched, which
+    the watermark above made false: truncate-then-skip-everything zeroed
+    smallremote.jsonl on every run.  Scoping the rewrite to the sources that are
+    actually about to be replaced de-duplicates without discarding the rest.
+    """
+    if not os.path.exists(OUT):
+        return 0, 0
+    kept = dropped = 0
+    tmp = OUT + ".tmp"
+    with open(OUT, encoding="utf-8", errors="replace") as f, \
+            open(tmp, "w", encoding="utf-8") as g:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                src = json.loads(line).get("source")
+            except ValueError:
+                continue
+            if src in run_now:
+                dropped += 1
+                continue
+            g.write(line)
+            kept += 1
+    os.replace(tmp, OUT)
+    return kept, dropped
+
+
 SOURCES = {
     "jobspresso": do_jobspresso,
     "hubstafftalent": do_hubstaff,
@@ -1067,17 +1122,38 @@ def main():
             raise SystemExit("unknown source %r (choose from %s)"
                              % (x, ", ".join(SOURCES)))
     st = load_state()
+    # Decide the whole pass BEFORE opening the writer: carry_forward has to know
+    # which sources are about to be replaced, and a skipped source must keep the
+    # rows it banked earlier rather than losing them to a blanket truncate.
+    run_now, skipped = [], []
+    for name in SOURCES:
+        if only and name not in only:
+            skipped.append((name, "not in SMALLREMOTE_ONLY"))
+            continue
+        why = stale_reason(st.setdefault(name, {}))
+        if why is None:
+            ent = st[name]
+            skipped.append((name, "done (%s rows on %s), under %g days"
+                            % (ent.get("rows"), ent.get("at"), MAX_AGE_DAYS)))
+        else:
+            run_now.append(name)
+    for name, why in skipped:
+        print("  %s: skipped — %s" % (name, why), flush=True)
+    kept, dropped = carry_forward(set(run_now))
+    print("  carried forward %d row(s) from %d skipped source(s); "
+          "dropped %d row(s) from %d source(s) being re-fetched"
+          % (kept, len(skipped), dropped, len(run_now)), flush=True)
+    if not run_now:
+        print("  nothing to re-fetch — every source is inside the %g-day "
+              "window (SMALLREMOTE_FORCE=1 overrides)" % MAX_AGE_DAYS,
+              flush=True)
+
     out = cc.Writer(OUT)
     bad = []
     t0 = time.time()
-    for name, fn in SOURCES.items():
-        if only and name not in only:
-            continue
+    for name in run_now:
+        fn = SOURCES[name]
         ent = st.setdefault(name, {})
-        if ent.get("status") == "done" and not FORCE:
-            print("  %s: already done (%s rows on %s) — SMALLREMOTE_FORCE=1 to "
-                  "re-run" % (name, ent.get("rows"), ent.get("at")), flush=True)
-            continue
         t = time.time()
         try:
             n = fn(out, st)
@@ -1098,8 +1174,17 @@ def main():
             ent.pop("done", None)             # crawl finished; drop the URL set
         save_state(st)
     out.close()
-    print("DONE smallremote_fetch -> %s (%.1fs)%s"
-          % (OUT, time.time() - t0,
+    try:
+        with open(OUT, encoding="utf-8", errors="replace") as f:
+            total = sum(1 for line in f if line.strip())
+    except OSError:
+        total = -1
+    # run_all shows the last line as this step's summary, so it reports the
+    # FILE's size.  "0 rows written" was true and healthy-looking for ten days
+    # while the file itself sat at zero.
+    print("DONE smallremote_fetch -> %s: %d row(s) total, %d source(s) "
+          "re-fetched, %d carried forward (%.1fs)%s"
+          % (OUT, total, len(run_now), kept, time.time() - t0,
              "; FAILED: " + ", ".join(bad) if bad else ""), flush=True)
     return 1 if bad else 0
 

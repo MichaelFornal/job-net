@@ -3,11 +3,9 @@
 import json, csv, sys
 from collections import Counter
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-
 SRC = sys.argv[1] if len(sys.argv) > 1 else "getro_collections.jsonl"
-OUT_CSV = sys.argv[2] if len(sys.argv) > 2 else os.path.join(BASE, "getro_job_boards.csv")
-OUT_URLS = os.path.join(BASE, "getro_boards_urls.txt")
+OUT_CSV = sys.argv[2] if len(sys.argv) > 2 else "/Users/michaelfornal/Documents/jb/getro_job_boards.csv"
+OUT_URLS = "/Users/michaelfornal/Documents/jb/getro_boards_urls.txt"
 
 recs = {}
 for line in open(SRC):

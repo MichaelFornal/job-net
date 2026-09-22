@@ -387,9 +387,34 @@ def parse_salary(s):
 
 def job_key(j):
     """Stable identity.  Trap (1): `url` is randomized per RESPONSE, so the
-    only thing that survives across two calls is the content tuple."""
+    only thing that survives across two calls is the content tuple.
+
+    `date` WAS in this tuple and was the bug, removed 2026-09-16.  It is
+    Careerjet's INDEX time, not the employer's posting date (see posted_of
+    below, which says so), so re-indexing an unchanged ad minted a brand-new
+    identity for it.  The same American Red Cross posting appears 343 times in
+    the corpus -- 343 distinct job_ids, 343 distinct jobviewtrack URLs, all
+    stamped 2026-09-08.  Nothing downstream could collapse them: norm_dedupe
+    and bh_build_combined key on (source, board, job_id), and every copy had a
+    different job_id.
+
+    They were absorbed instead by all_jobs_build's tier-3
+    company+title+location key, which is why that number looked alarming --
+    1,821,147 of its 1,822,026 merges (99.95%) were careerjet rows merging into
+    each other.  The dedupe was not destroying reqs; it was silently papering
+    over this.
+
+    Dropping `date` makes a re-indexed ad keep its identity, so norm_dedupe
+    collapses it at source.  The existing backlog is NOT retroactively fixed:
+    rows already on disk keep their date-salted ids and age out through
+    all_jobs_build's posted-date cutoff.  Do not try to rewrite them by
+    recomputing this hash from the normalized row -- `locations` here is the
+    RAW careerjet field and does not survive normalization, so recomputed ids
+    would not match the ones this function will go on to produce, and the
+    corpus would split permanently instead of converging.
+    """
     raw = "|".join(str(j.get(k) or "") for k in
-                   ("company", "title", "locations", "date"))
+                   ("company", "title", "locations"))
     return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:16]
 
 

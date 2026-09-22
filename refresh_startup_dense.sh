@@ -18,7 +18,7 @@
 #
 # Detach with nohup; plain background jobs get killed mid-run here.
 # Progress: refresh.status + logs/refresh_2026-07-30/<stage>.out
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 
 LOGD=logs/refresh_2026-07-30
 mkdir -p "$LOGD"

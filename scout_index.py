@@ -18,7 +18,7 @@ per fetch ever need.  Instead the matrix row order IS corpus rowid order, so a
 row index is a database key; ct_key and company are carried as stable 64-bit
 digests, which is all a mask or a per-company cap needs.  Digests are blake2b,
 not hash(), because hash() is randomised per process and this file outlives the
-process that wrote it -- the same PYTHONHASHSEED trap that made level
+process that wrote it -- the same PYTHONHASHSEED trap that made level_build
 print a different `why` on every run.
 """
 import argparse

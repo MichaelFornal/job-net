@@ -4,7 +4,7 @@
 # file, so re-running only redoes missing/failed items). Detach with nohup —
 # plain background tasks in this environment get killed mid-run.
 # Progress: gh_pipeline.status + per-stage gh_<stage>.out logs.
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 
 run_stage() { # <script.py> <tag> <max_attempts>
   local SCRIPT=$1 TAG=$2 MAX=$3 i=0 rc=1

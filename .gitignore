@@ -1,19 +1,20 @@
-# Data, not code.  This repo versions the pipeline's source only — the corpus
-# is multi-GB and is reproduced by running the pipeline, not by checkout.
+# Data, not code.  This repo versions the pipeline's .py/.sh/.md only — the
+# corpus is multi-GB and is reproduced by running the pipeline, not by checkout.
 
 # --- corpus + artifacts ---
 *.jsonl
 *.csv
 *.xlsx
+*.docx
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
-*.npz
 
 # --- fetcher state, ledgers, caches ---
-# Load-bearing (a lost state file costs hours of re-crawl) but machine state,
-# not source: they churn on every run and mean nothing on another machine.
+# These ARE load-bearing (a lost state file costs hours of re-crawl) but they
+# are machine state, not source, and they churn every run.  They are protected
+# by ats_snapshot_*/ and the .full / .prev.json backups instead.
 *_state.json
 *_ledger.json
 *.full
@@ -21,7 +22,14 @@
 *.bak
 *.bak-*
 *_posted_ledger.json
+# Rebuilt from those ledgers by date_basis_index.py -- 42 MB of apply_urls, and
+# derived data by definition. The classification that is SOURCE, not data, lives
+# in date_basis.py, which is versioned.
 date_basis_index.json
+
+# --- caches, done-ledgers, discovery output ---
+# Regenerable, but some cost hours (wayback CDX).  Protected by ats_snapshot_*/,
+# not by git — they are machine state that churns every run.
 *_cache.json
 *_done.txt
 *_seen_keys.txt
@@ -30,6 +38,105 @@ date_basis_index.json
 *_collections.jsonl*
 *.scanned
 *.progress
+# advisory write locks (candidates_common.csv_lock)
+*.lock
+
+# --- run output ---
+logs/
+*.out
+*.log
+*.status
+*.nohup
+nohup.out
+
+# --- generated documents + assets ---
+*.pdf
+*.png
+*.jpg
+
+# --- apply engine: keep the code, drop what it produces ---
+apply/artifacts/
+apply/.llm_cache/
+apply/resume/*.md
+apply/resume/*.html
+
+# --- site/ is its own git repo ---
+site/
+
+# --- snapshots + scratch ---
+ats_snapshot_*/
+preflight_*/
+intlmisc_state/
+remoteleaf_sitemaps/
+tenants/
+scanned/
+*.tmp
+.ats_staging/
+
+# --- discovery intermediates (regenerable, large) ---
+slug_wayback_urls.txt
+*_wayback_urls.txt
+# The Wayback-free discovery dumps, same contract as the two lines above:
+# large, regenerable from the source index, and pure intermediates.
+# workday_cc_urls.txt alone is 41 MB and the *_wayback_urls.txt rule does not
+# reach it, so it would otherwise be committed.
+*_cc_urls.txt
+*_cc_slugs.txt
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- macOS ---
+.DS_Store
+
+# --- secrets ---
+.env
+*.key
+credentials.json
+apply/secrets.json
+
+# --- personal application artifacts ---
+# The patterns above cover apply/resume/*.html and *.md, but build.py writes
+# into apply/resume/out/ -- one level deeper, so they never matched.  Cover
+# letters and company-targeted resumes carry the full legal name in the
+# FILENAME, so a stray `git add -A` leaks before anyone opens the file.
+apply/resume/out/
+
+# Rendered screening / worklist output.  Each of these carries identity,
+# employer-verification notes, or the live apply backlog.
+Answer_Sheet.html
+Skills_Sheet.html
+skills_demand.json
+Apply_Worklist_*.html
+Direct_Apply_*.html
+Today_Targets.html
+Screening_Packet_*.html
+Verification_Requests_*.html
+
+# Derived personal state the earlier data patterns miss: these are .json/.npz,
+# not .csv/.jsonl/.db, so nothing above caught them.
+worklist_live.json
+score_profiles.json
+scout_index.npz
+
+# wttj_fetch.py full-fidelity dumps (42-field job records + company records).
+# Hundreds of MB uncompressed; regenerable in minutes from the live index.
+wttj_raw/
+
+# lane-private norm dir for the fellowship feed (see fellowship_build.py)
+fellow_norm/
+
+# darkhorse: agent/pipe run outputs hold dossiers on private individuals. Local only.
+darkhorse/runs/
+
+# --- publish-side rules -------------------------------------------------------
+# These are job-net's own and are not in the source tree's .gitignore, so a
+# refresh that copies that file over this one drops them.  scan_secrets.sh fails
+# the build if tools/denylist.local.txt is ever tracked.
+*.npz
 
 # --- harvested inventories ---
 # Deliberately not versioned: this repo publishes the discovery METHOD, not a
@@ -44,35 +151,7 @@ slug_discovery_report.txt
 # hand-edited but per-machine: triage_load.py recreates it with a header.
 profile.json
 triage_blocklist.txt
-
-# --- run output ---
-logs/
-*.out
-*.log
-*.status
-nohup.out
 *.pid
-
-# --- generated documents + assets ---
-*.pdf
-*.png
-*.jpg
-
-# --- snapshots + scratch ---
-ats_snapshot_*/
-preflight_*/
-tenants/
-scanned/
-*.tmp
-
-# --- python ---
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-
-# --- macOS ---
-.DS_Store
 
 # --- the identity-specific half of the PII scanner ---
 # tools/denylist.txt is generic and versioned.  The patterns naming real
@@ -80,8 +159,4 @@ venv/
 # precisely what the scanner exists to prevent.
 tools/denylist.local.txt
 
-# --- secrets ---
-.env
-*.key
-credentials.json
 secrets.json

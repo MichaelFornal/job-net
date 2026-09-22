@@ -121,6 +121,66 @@ EXCL_SRC = {"workday", "oracle", "icims", "taleo", "successfactors",
             # roles, and those are not startups either.
             "radancy", "cornerstone", "ukg", "dayforce", "neogov"}
 
+# Clarity alias.  Prefer this name in new code: the set above denies a startup
+# TIER, and every bug it has caused came from a reader taking the membership
+# test for something broader.  Same object, honest name.
+EXCL_TIER_SRC = EXCL_SRC
+
+# ---------------------------------------------------------------------------
+# THE REPUBLISHERS -- and why this is a SEPARATE set from EXCL_TIER_SRC.
+#
+# EXCL_TIER_SRC fuses two unrelated facts, which is correct for the one job it
+# was written for (a Workday tenant is not a startup, and neither is a Himalayas
+# repost) and wrong for every other question anyone has asked it since:
+#
+#   "not a startup"      workday oracle icims taleo successfactors eightfold
+#                        phenom adp paycom keka jobvite gem zohorecruit radancy
+#                        cornerstone ukg dayforce neogov  <- EMPLOYER-DIRECT.
+#                        The employer's own ATS.  Applying there applies to the
+#                        employer.
+#   "republishes"        himalayas jobgether careerjet adzuna torre wttj ...
+#                        <- the row is a copy; the Apply button belongs to the
+#                        republisher.
+#
+# Reusing the fused set as an AGGREGATOR list marked 50,555 live employer-direct
+# rows as republishers -- UMass Memorial, Mass General Brigham, Boston Medical
+# Center, Dana-Farber, Vertex, Takeda, the Commonwealth of MA -- and because
+# lanes.ORDER_TERMS leads with `is_agg ASC` and swath_build/picks_build gate on
+# `is_agg = 0`, that pushed 12,774 undecided MA-local rows behind every genuine
+# repost in their own lane, and cut the swath candidate pool 133,411 -> 84,371.
+#
+# date_basis.py:30 and fastapply_build.py:15 each caught this from their own
+# angle and each fixed it locally.  This is the set those two notes asked for.
+#
+# MEMBERSHIP RULE: a source belongs here if its Apply button does not reach the
+# employer.  Nothing else.  Not size, not enterprise-ness, not date quality.
+#
+# Two judgement calls worth stating, because both look like omissions:
+#   usajobs   the US government's own board -- the employer IS the publisher.
+#             It stays in EXCL_TIER_SRC (a federal agency is not a startup) and
+#             stays OUT here.
+#   bullhorn  a staffing desk's own ATS.  The desk is the hiring contact, so
+#             applying there reaches a human who can move you.  Same call.
+#
+# `is_agg` is set from this set OR the apply URL (see triage_load.py) -- the set
+# alone is not enough, because a republisher runs its own employer board too:
+# Jobgether posts on jobs.lever.co/jobgether.  direct_apply.AGG_HOSTS /
+# REPUBLISHER_SLUG carry the URL half.
+REPUBLISHER_SRC = {
+    "himalayas", "jobgether", "careerjet", "themuse", "adzuna", "torre",
+    "wttj", "remoteleaf", "remoteio", "jobicy", "powertofly", "arbeitsagentur",
+    "nofluffjobs", "instahyre", "wanted", "freelancer", "braintrust",
+    "hubstafftalent", "remoteok", "weworkremotely", "remotive",
+    "workingnomads", "justremote", "dynamitejobs", "jobspresso",
+}
+
+# Drift guard.  Every republisher is also tier-excluded (a reposting board is
+# not a startup), so this must hold.  If a new source is added to one set and
+# not the other, fail loudly here rather than silently in a lane six weeks on.
+assert REPUBLISHER_SRC <= EXCL_TIER_SRC, (
+    "REPUBLISHER_SRC drifted out of EXCL_TIER_SRC: "
+    + ", ".join(sorted(REPUBLISHER_SRC - EXCL_TIER_SRC)))
+
 # Startup density per ATS, measured by joining each source's companies against
 # the enriched (Getro/YC) population and scoring funded_share * small_share:
 #

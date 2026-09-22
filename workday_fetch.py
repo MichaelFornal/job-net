@@ -211,6 +211,7 @@ _next_t = {}
 _interval = {}
 _pause_until = {}
 _n429 = {}
+_ok_streak = {}   # consecutive clean responses per pod; see speed_up()
 _gates = {}
 _gate_lock = threading.Lock()
 
@@ -251,6 +252,35 @@ def slow_down(pod):
         _pause_until[pod] = time.time() + 20
         _interval[pod] = min(_interval[pod] * 1.5, 0.5)
         _n429[pod] = _n429.get(pod, 0) + 1
+        _ok_streak[pod] = 0
+
+
+def speed_up(pod):
+    """Walk a pod's interval back toward 1/RPS after a run of clean responses.
+
+    Ported from ats_fetch.speed_up() on 2026-09-15.  slow_down() was one-way:
+    each edge 429 multiplied the pod's interval by 1.5 up to the 0.5s cap, and
+    nothing ever lowered it again, so three backoffs in the first minutes held
+    a pod at 3.6 rps (and five at 2 rps) for the remaining three hours of a
+    12 rps budget.  This fetcher is the refresh phase's critical path in every
+    run since 09-05 -- 164-203 min, capped at WD_BUDGET_MIN in 3 of 5 -- and
+    the same code on the same budget drew 867k rows one night and 1,552k the
+    next depending on how early wd1 got pinned.
+
+    Recovery is deliberately slower than the backoff (x0.9 per 40 clean
+    responses vs x1.5 per 429), so a pod that is genuinely refusing still
+    wins the argument.
+    """
+    _pod_state(pod)
+    with _rate_lock:
+        n = _ok_streak.get(pod, 0) + 1
+        if n < 40:
+            _ok_streak[pod] = n
+            return
+        _ok_streak[pod] = 0
+        floor = 1.0 / RPS
+        if _interval[pod] > floor:
+            _interval[pod] = max(_interval[pod] * 0.9, floor)
 
 
 class Transient(Exception):
@@ -323,6 +353,7 @@ def post_jobs(s, pod, url, body):
                     "jobPostings" not in d and "total" not in d):
                 # 200 + JSON that is not a jobs payload: still not a board.
                 raise Dead("200-not-jobs-payload")
+            speed_up(pod)
             return d
 
         ec = _err_code(r)
@@ -944,6 +975,10 @@ def main():
         print("  dead by discriminator: %s" % _dead_reasons, flush=True)
     if _n429:
         print("  edge backoffs by pod: %s" % _n429, flush=True)
+        # Where each backed-off pod ENDED.  1/RPS means speed_up() walked it
+        # all the way back; 0.5 means it was still pinned at the finish.
+        print("  final intervals by pod: %s"
+              % {k: round(_interval.get(k, 0), 3) for k in _n429}, flush=True)
     if stopped_early:
         print("BUDGET REACHED after %dmin: %d/%d boards; the rest are still "
               "pending and queued for the next run (WD_BUDGET_MIN=0 to "

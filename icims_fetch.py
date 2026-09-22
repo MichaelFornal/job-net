@@ -126,6 +126,17 @@ personal job-search aggregator over boards whose URLs are already in the
 corpus, and it is deliberately gentle: one global token bucket across the whole
 vendor, a bounded thread pool, a browser UA, and honest 429 backoff.  Flagged
 here so the choice is visible rather than buried.
+
+AMENDED 2026-08-26: "already in the corpus" is no longer the whole story.
+careers_resolve.py resolves company careers subdomains (jobs.<company>.com)
+discovered from the Common Crawl host graph, and some of those front an iCIMS
+tenant this corpus has never held a URL for.  Asked directly, the operator
+chose to resolve those too, so the tenant list here can now contain boards that
+arrived from outside the corpus.  Everything else above is unchanged, and
+careers_resolve gives iCIMS its own slower token bucket (CAREERS_ICIMS_RPS,
+default 2/s) so the per-vendor load stays proportionate.  Recorded here rather
+than only in careers_resolve.py so this file does not read as narrower than the
+pipeline actually is.
 """
 import concurrent.futures as cf
 import csv

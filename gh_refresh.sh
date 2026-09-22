@@ -3,7 +3,7 @@
 # JSONL + state so the fetch is a true refresh, re-fetch every live board from
 # the existing greenhouse_job_boards.csv, then rebuild the master CSV + sheet.
 # Mirrors the rotate-then-fetch semantics run_all.py uses for getro/lever.
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 
 run_stage() { # <script.py> <tag> <max_attempts>
   local SCRIPT=$1 TAG=$2 MAX=$3 i=0 rc=1

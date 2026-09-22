@@ -24,6 +24,7 @@ their APIs carry tens of thousands of postings, nearly all of them remote.
 run_all.py passes the flag; a bare run stays contract-only for the legacy
 Contract_Gigs workbooks.
 """
+import json
 import os
 import time
 from urllib.parse import quote
@@ -50,6 +51,18 @@ HIMALAYAS_MAX_OFFSET = int(os.environ.get("HIMALAYAS_MAX_OFFSET")
 # picking up where a capped run stopped needs an explicit start rather than a
 # re-run (which would duplicate every row already collected).
 HIMALAYAS_START_OFFSET = int(os.environ.get("HIMALAYAS_START_OFFSET") or 0)
+# How many CONSECUTIVE blocked answers (406/429/5xx/transport) end the walk.
+# Deliberately far above the 5-empty-page rule: an empty page is evidence about
+# the feed, a blocked one is evidence about us.  12 tries with the capped
+# back-off below is ~20 minutes of patience at one offset before giving up.
+HIMALAYAS_BLOCK_TRIES = int(os.environ.get("HIMALAYAS_BLOCK_TRIES") or 12)
+# Below this fraction of a board's own totalCount, the run is INCOMPLETE and
+# says so in its last line -- run_all surfaces that line as the step summary.
+HIMALAYAS_MIN_COVERAGE = float(os.environ.get("HIMALAYAS_MIN_COVERAGE") or 0.9)
+
+# Boards that ended short of their own advertised total.  A silently-truncated
+# board looked exactly like a healthy one before 2026-08-25.
+SHORTFALL = []
 ARBEITNOW_MAX_PAGE = int(os.environ.get("ARBEITNOW_MAX_PAGE")
                          or (400 if KEEP_ALL else 60))
 
@@ -62,8 +75,14 @@ def num(v):
         return ""
 
 
-def jsn(s, url, **kw):
+def jsn(s, url, err_out=None, **kw):
     """cc.get_json, but a transport failure is LOUD instead of empty.
+
+    Pass err_out={} to also learn *why* the answer was empty.  Printing the
+    reason was never enough: a caller that pages a feed has to tell "the board
+    is throttling me" from "the board has no more jobs", and both arrive here
+    as {}.  himalayas ended its 2026-08-24 walk at 18% of the board because it
+    could not.
 
     cc.get_json hands back {"__error__": ...} / {"__status__": 404}, and every
     caller here reads it as d.get("jobs") or [] — so a timeout, a 403 or a
@@ -73,9 +92,14 @@ def jsn(s, url, **kw):
     were in fact healthy when re-probed minutes later.
     """
     d = cc.get_json(s, url, **kw)
+    if err_out is not None:
+        err_out.clear()
     if isinstance(d, dict) and ("__error__" in d or "__status__" in d):
         why = d.get("__error__") or f"HTTP {d.get('__status__')}"
         print(f"    ! {url} -> {why}", flush=True)
+        if err_out is not None:
+            err_out.update(status=d.get("__status__"),
+                           error=d.get("__error__"), why=why)
         return {}
     return d
 
@@ -235,17 +259,42 @@ def do_himalayas(s, out):
     n = 0
     off = HIMALAYAS_START_OFFSET
     total = None
-    tries = 0
+    tries = 0          # consecutive genuinely-empty pages (HTTP 200, jobs: [])
+    blocked = 0        # consecutive throttled/errored answers
+    throttled = 0      # total, for the summary
+    stopped = ""
+    err = {}
     while off < HIMALAYAS_MAX_OFFSET:
         d = jsn(s, "https://himalayas.app/jobs/api"
-                   f"?limit=20&offset={off}")
+                   f"?limit=20&offset={off}", err_out=err)
         if total is None and d.get("totalCount"):
             total = int(d["totalCount"])
             print(f"    himalayas totalCount={total}", flush=True)
+        if err:
+            # A THROTTLE IS NOT THE END OF THE FEED.  Until 2026-08-25 a 406 or
+            # 429 fell through to the empty-page counter below, so five blocked
+            # answers in a row ended the walk and the run still printed DONE and
+            # exited 0.  On 2026-08-24 that stopped himalayas at offset 19,200 of
+            # totalCount 103,859 -- 67,209 rows, which was the ENTIRE boards_all
+            # delta that run, and boards_all is truncate-and-rewrite so there was
+            # no carry-forward to soften it.  Blocked answers now get their own
+            # counter, a much longer leash and a capped linear back-off.
+            blocked += 1
+            throttled += 1
+            if blocked >= HIMALAYAS_BLOCK_TRIES:
+                stopped = f"blocked ({err.get('why')})"
+                print(f"    himalayas: giving up at offset {off} after "
+                      f"{blocked} blocked answers ({err.get('why')})",
+                      flush=True)
+                break
+            time.sleep(min(15 * blocked, 120))
+            continue                   # SAME offset, deliberately
+        blocked = 0
         jobs = d.get("jobs") or []
         if not jobs:
             tries += 1
             if tries >= 5:
+                stopped = f"{tries} empty answers"
                 print(f"    himalayas: giving up at offset {off} after "
                       f"{tries} empty answers", flush=True)
                 break
@@ -277,8 +326,17 @@ def do_himalayas(s, out):
         if total and off >= total:
             break
         time.sleep(0.4)
-    print(f"  himalayas: {n} (scanned to offset {off} of "
-          f"totalCount {total})", flush=True)
+    msg = (f"  himalayas: {n} (scanned to offset {off} of "
+           f"totalCount {total})")
+    if throttled:
+        msg += f"; {throttled} throttled answer(s)"
+    print(msg, flush=True)
+    # totalCount counts postings before CLASSIFY filters them, so `n` is
+    # legitimately smaller -- coverage is judged on OFFSET reached, not rows.
+    if total and off < total * HIMALAYAS_MIN_COVERAGE:
+        SHORTFALL.append(f"himalayas {off}/{total} "
+                         f"({100.0 * off / total:.0f}%)"
+                         + (f" [{stopped}]" if stopped else ""))
 
 
 # jobicy has NO offset/page parameter (?offset= and ?page= return a BLANK
@@ -491,14 +549,36 @@ SOURCES = {
 
 
 def main():
-    # BOARDS_ONLY=a,b,c re-runs just those sources.  The writer APPENDS, so a
-    # full re-run to recover one failed source would duplicate every other
-    # source's rows — himalayas alone is ~38k of them.
+    # BOARDS_ONLY=a,b,c re-runs just those sources.  The writer APPENDS, so
+    # re-running one source on top of an existing file would leave TWO copies
+    # of it -- which is the trap in the recovery path for a throttled board:
+    # you re-fetch himalayas to repair it and silently double what survived.
+    # Strip exactly the sources about to be rewritten, keep everything else.
     only = [x for x in os.environ.get("BOARDS_ONLY", "").split(",") if x]
     for name in only:
         if name not in SOURCES:
             raise SystemExit(f"unknown source {name!r} (choose from "
                              f"{', '.join(SOURCES)})")
+    if only and os.path.exists(OUT):
+        kept = dropped = 0
+        tmp = OUT + ".tmp"
+        with open(OUT, encoding="utf-8", errors="replace") as f, \
+                open(tmp, "w", encoding="utf-8") as g:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    src = json.loads(line).get("source")
+                except ValueError:
+                    continue
+                if src in only:
+                    dropped += 1
+                    continue
+                g.write(line)
+                kept += 1
+        os.replace(tmp, OUT)
+        print(f"  BOARDS_ONLY={','.join(only)}: dropped {dropped} old row(s) "
+              f"from those sources, kept {kept} from the rest", flush=True)
     out = cc.Writer(OUT)
     s = cc.session()
     for name, fn in SOURCES.items():
@@ -511,7 +591,13 @@ def main():
                   flush=True)
     out.close()
     s.close()
-    print("DONE boards_fetch", flush=True)
+    # run_all reports the LAST non-=== line of this log as the step's summary,
+    # so the health signal has to live there or nobody sees it.
+    if SHORTFALL:
+        print("DONE boards_fetch — INCOMPLETE: " + "; ".join(SHORTFALL),
+              flush=True)
+    else:
+        print("DONE boards_fetch", flush=True)
 
 
 if __name__ == "__main__":

@@ -182,6 +182,16 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 TENANTS = os.path.join(BASE, "tenants", "manatal.csv")
 CANDIDATES = os.path.join(BASE, "manatal_candidates.csv")
 OUT = os.path.join(cc.NORM_DIR, "manatal.jsonl")
+# Rows land here first and are folded into OUT board-scoped by
+# cc.merge_board_scoped (see its docstring for the caller contract).  Until
+# 2026-09-16 this fetcher appended straight to OUT, which is why run_all's
+# rotate_family would not refresh its state: dropping the done-keys of an
+# append-only family re-fetches every board and APPENDS a second copy of every
+# row (run_all.py:958-1010 records the reasoning).  The cost of not refreshing
+# was the other half of that trade and it is the larger one -- 257,118 manatal
+# rows in the master, 95.3% of them in no other pipe, and 0.9% dated this month
+# because the family has fetched nothing since August.
+PART = OUT + ".part"
 STATE = os.path.join(BASE, "manatal_fetch_state.json")
 LEDGER = os.path.join(BASE, "manatal_posted_ledger.json")
 
@@ -892,7 +902,14 @@ def main():
           "detail=%s keep_all=%s" % (len(tenants), len(todo), already,
                                      DETAIL, KEEP_ALL), flush=True)
 
-    w = cc.Writer(OUT)
+    # Fold in a part left behind by a killed run BEFORE reopening it, so the
+    # part this run builds is exactly one generation.  See
+    # cc.merge_board_scoped.
+    c_kept, c_new = cc.merge_board_scoped(OUT, PART)
+    if c_new:
+        print("  carried in %d row(s) from a previous run's part file "
+              "(%d kept)" % (c_new, c_kept), flush=True)
+    w = cc.Writer(PART)
     deadline = time.time() + BUDGET_MIN * 60 if BUDGET_MIN else None
     done = 0
     stopped = False
@@ -901,6 +918,64 @@ def main():
     # board is hundreds of throttled requests, so "wait for the in-flight ones"
     # is unbounded -- it sat for 2h47m after the budget fired on 2026-08-21.
     ex = cf.ThreadPoolExecutor(max_workers=WORKERS)
+    # WATCHDOG.  The deadline below is only consulted when a future COMPLETES,
+    # so one slow board defers the check for as long as it runs: on 2026-08-26
+    # this step took 93.6 min against a 60-min budget.  A daemon timer is the
+    # only thing that can hold the ceiling regardless of what the pool is doing.
+    # The grace window lets the normal path win the race and exit cleanly --
+    # state, ledger and the JSONL are all flushed there; here they are not, so
+    # this fires only when the clean path has already failed to.
+    _wd_grace = float(os.environ.get("MANATAL_BUDGET_GRACE") or 300)
+
+    def _watchdog():
+        # THIS NOW WRITES, changed 2026-09-05.  It used to write nothing on
+        # purpose, reasoning that the in-loop checkpoint had already covered
+        # us and that a timer thread saving mid-save would tear the ledger.
+        # The first half is false in the one case that matters.
+        #
+        # The in-loop checkpoint only runs when a future COMPLETES.  When a
+        # board hangs -- the steady state for this fetcher since it drained,
+        # 2 tenants to fetch and one that never returns -- as_completed stops
+        # yielding, the loop body never runs again, and NO check inside it can
+        # fire, count-based or time-based.  os._exit(1) below then skips the
+        # `finally` that would have saved.  So nothing was written at all:
+        # state and ledger froze on 2026-09-02 and every run since re-dated
+        # ~285 undated postings to the run date -- precisely the damage the
+        # no-write policy was written to prevent.
+        #
+        # The second half is handled rather than avoided.  cc.save_state is
+        # atomic (writes <path>.tmp, then os.replace), so a reader can never
+        # see a torn file; the only real hazard is two writers racing on the
+        # same tmp path, which the lock removes.  If the main thread holds the
+        # lock it is already mid-save, and its own os.replace either lands or
+        # leaves the previous file intact -- so giving up after the timeout
+        # loses nothing either way.
+        got = _lock.acquire(timeout=10)
+        try:
+            if got:
+                cc.save_state(STATE, _state)
+                cc.save_state(LEDGER, _ledger)
+                print("  [WATCHDOG: state + ledger flushed]", flush=True)
+            else:
+                print("  [WATCHDOG: main thread mid-save, leaving it to "
+                      "finish]", flush=True)
+        except Exception as e:                      # never block the exit
+            print("  [WATCHDOG: flush failed: %r]" % (e,), flush=True)
+        finally:
+            if got:
+                _lock.release()
+        print("  [WATCHDOG: %.0fs past the %d-min budget — hard exit; the "
+              "rest stay pending]" % (_wd_grace, BUDGET_MIN), flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
+
+    if BUDGET_MIN:
+        _wd = threading.Timer(BUDGET_MIN * 60 + _wd_grace, _watchdog)
+        _wd.daemon = True
+        _wd.start()
+    else:
+        _wd = None
     try:
         futs = [ex.submit(work, w, t, h) for t, h in todo]
         for _ in cf.as_completed(futs):
@@ -909,7 +984,17 @@ def main():
             # job for the dates), so a 20-board interval is tens of minutes
             # of ledger at risk, and a lost ledger re-dates every undated
             # posting to the day of the crash.
-            if done % 5 == 0:
+            # "or done == len(todo)" added 2026-09-04, and it is what makes
+            # the watchdog's no-write policy safe.  Once this family drained,
+            # a bare run had 1-2 boards to fetch, so `done` never reached 5:
+            # the in-loop checkpoint never fired, the watchdog's os._exit(1)
+            # skipped the `finally` below, and NOTHING was ever written.  State
+            # and ledger froze on 2026-09-02 and every run since re-dated ~285
+            # undated postings to the run date -- the precise damage this
+            # checkpoint exists to prevent, caused by the checkpoint's own
+            # interval.  Always checkpointing the last board restores the
+            # watchdog comment's premise that at most 5 boards are at risk.
+            if done % 5 == 0 or done == len(todo):
                 with _lock:
                     cc.save_state(STATE, _state)
                     cc.save_state(LEDGER, _ledger)
@@ -926,10 +1011,18 @@ def main():
         # write with ValueError inside its own thread instead of appending half
         # a line to the JSONL.
         ex.shutdown(wait=False)
+        # The watchdog is deliberately NOT cancelled: shutdown(wait=False) does
+        # not stop the futures already running, so the saves and w.close() below
+        # still sit in front of a pool that may not be done.  A clean finish
+        # kills the timer by ending the process first.
         with _lock:
             cc.save_state(STATE, _state)
             cc.save_state(LEDGER, _ledger)
         w.close()
+        kept, added = cc.merge_board_scoped(OUT, PART)
+        if added or kept:
+            print("  merged board-scoped: %d new row(s) over %d kept"
+                  % (added, kept), flush=True)
     print("DONE manatal: %s" % _stats, flush=True)
     print("  dead reasons: %s" % (_dead_why or "-"), flush=True)
     print("  429 backoffs: %s  final intervals: %s"

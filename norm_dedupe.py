@@ -32,7 +32,7 @@ emptying one to refill it is not.
 
 THREE RULES, each taken from something already in this repo:
 
-1. KEY = (source, board, str(job_id)), identical to bh_build_combined.py.
+1. KEY = (source, board, str(job_id)), identical to bh_build_combined.py:156-159.
    Board-scoped on purpose — bamboohr and bullhorn reuse per-board integer ids,
    so (source, job_id) alone over-merges across agencies.
 

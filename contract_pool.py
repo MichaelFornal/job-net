@@ -12,7 +12,7 @@ meaning it depends on (see WHY THE FILTER IS TYPE-BASED below).  Writes:
     contract_pool.csv            the full ranked pool, all score components
     Contract_Pool_<date>.csv     the top N, in triage_load.py's column shape
 
-Ranking is the configured blend: fit 60 / speed 25 / rate 15, summed to a
+Ranking is the blend the user chose: fit 60 / speed 25 / rate 15, summed to a
 0-100 `score` with a plain-English `score_why` so any rank can be audited.
 
 WHY THE FILTER IS TYPE-BASED
@@ -238,11 +238,11 @@ FIT_TIERS = [
     (32, "Software/platform engineering", ENG_RE),
     (18, "Adjacent tech", ADJ_TECH_RE),
 ]
-# Floor for the triage slice.  The configured blend ranks correctly but
+# Floor for the triage slice.  The blend the user chose ranks correctly but
 # says nothing about composition, and the pool is 85% "Other professional":
 # only 1,594 of 10,891 rows reach Adjacent tech or better.  Without a floor the
 # bottom 400 of a 1000-row queue fills with maximally-fast, well-paid work that
-# is simply off-target -- trial attorneys, HR interns, per-diem organ
+# is simply not this user's -- trial attorneys, HR interns, per-diem organ
 # placement coordinators.  The floor picks WHO is eligible; the blend still
 # decides the order among them.
 DEFAULT_MIN_FIT = 18
@@ -311,7 +311,7 @@ _PER = {"hour": 1, "hourly": 1, "hr": 1, "h": 1,
         "annual": HOURS_PER_YEAR, "annually": HOURS_PER_YEAR}
 
 
-# A plausible US contract hourly rate.  Anything outside the band means the
+# A plausible US contract hourly rate.  Anything outside this band means the
 # row was parsed wrong, not that someone is paying $50,000 an hour.
 RATE_MIN, RATE_MAX = 10.0, 1000.0
 
@@ -817,10 +817,15 @@ def main():
     if "--selftest" in sys.argv:
         sys.exit(selftest())
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--top", type=int, default=1000,
-                    help="rows in the contract (fit-blend) slice, default 1000")
-    ap.add_argument("--top-money", type=int, default=1000,
-                    help="rows in the fast-money slice, default 1000")
+    # 4000, not 1000.  contract_pool.csv held 21,003 rows and the written
+    # slice held 1,899; undecided sat at 930 / 993, i.e. BOTH slices pressed
+    # flat against their own ceiling, which is what a binding cap looks like
+    # from the outside.  4000 clears it with headroom without writing the whole
+    # pool into triage.  0 = no cap if you want the lot.
+    ap.add_argument("--top", type=int, default=4000,
+                    help="rows in the contract (fit-blend) slice, default 4000")
+    ap.add_argument("--top-money", type=int, default=4000,
+                    help="rows in the fast-money slice, default 4000")
     ap.add_argument("--min-fit", type=float, default=DEFAULT_MIN_FIT,
                     help="minimum fit points for the triage slice "
                          f"(default {DEFAULT_MIN_FIT} = Adjacent tech or "

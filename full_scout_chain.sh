@@ -3,8 +3,8 @@
 #
 # Run AFTER the existing triage chain, never instead of it.  It touches nothing
 # triage.db owns: the thirty existing lanes read `jobs` and this writes only
-# corpus.db and scout_index.npz.  triage/lane_snapshot.py is the proof of that
-# and is run at both ends.
+# corpus.db, scout_index.npz and facet_index.npz.  triage/lane_snapshot.py is
+# the proof of that and is run at both ends.
 #
 #   ./full_scout_chain.sh              # rebuild everything
 #   ./full_scout_chain.sh --index-only # weights/features changed, corpus did not
@@ -15,18 +15,28 @@ BASE=".lane_baseline.json"
 [ -f "$BASE" ] || python3 triage/lane_snapshot.py --write "$BASE"
 
 if [ "${1:-}" != "--index-only" ]; then
-  echo "== 1/3 corpus_build =="
+  echo "== 1/4 corpus_build =="
   python3 corpus_build.py
-  echo "== 2/3 corpus_load =="
+  echo "== 2/4 corpus_load =="
   python3 corpus_load.py
 fi
 
-echo "== 3/3 scout_index =="
+echo "== 3/4 scout_index =="
 python3 scout_index.py
+
+# The filter panel's arrays.  Separate from scout_index.npz because the scorer
+# index carries what the SCORER needs (scout.py made the same call for
+# `delisted_on`), and built here rather than lazily on first use because
+# sixteen columns over the real corpus is 14.7s -- a lazy build would hang the
+# first click on the filter button with no way to say why.
+echo "== 4/4 facet_index =="
+python3 facet_index.py
 
 echo "== verify =="
 python3 score_features.py --selftest
 python3 score_profile.py --verify
+python3 triage/facet_selftest.py
+python3 triage/fullrun_selftest.py
 python3 triage/lane_snapshot.py --check "$BASE"
 echo
 echo "done -- restart triage/server.py to pick up the new index"

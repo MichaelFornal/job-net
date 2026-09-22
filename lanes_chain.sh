@@ -13,7 +13,7 @@
 #   * ma_remote_build BEFORE triage_chain      — the chain cannot load without its CSV
 #   * ANALYZE         AFTER  the load          — no sqlite_stat1 makes the partial
 #                                                indexes inert (lane menu 2.7s -> 12.8s)
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 set -x
 
 echo "=== STARTUP_BOARDS $(date -u +%T) ==="
@@ -29,9 +29,9 @@ echo "=== ANALYZE $(date -u +%T) ==="
 sqlite3 triage.db 'ANALYZE;' || exit 1
 
 echo "=== SERVER $(date -u +%T) ==="
-pkill -f 'python3 triage/server.py' 2>/dev/null
+pkill -f 'triage/server.py' 2>/dev/null
 sleep 2
-nohup python3 triage/server.py > logs/triage_server_2026-08-19.out 2>&1 &
+nohup python3 triage/server.py > logs/triage_server_$(date -u +%F).out 2>&1 &
 disown
 sleep 4
 curl -s -o /dev/null -w 'server HTTP %{http_code}\n' http://127.0.0.1:8766/

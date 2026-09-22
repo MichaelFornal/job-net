@@ -16,7 +16,7 @@
 # deleted.  The *_posted_ledger.json files are NEVER touched.
 #
 # Detach with nohup; plain background jobs get killed mid-run here.
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 
 LOGD=logs/refresh_$(date -u +%F)
 mkdir -p "$LOGD"

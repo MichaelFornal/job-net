@@ -34,16 +34,30 @@ PATTERNS = {
     # captured separately because the CXS endpoint needs BOTH.
     # Named groups because the two Workday host shapes put tenant/pod/site in
     # a DIFFERENT order and both feed one tenants/workday.csv.
+    # The tenant class allows "_".  It did not until 2026-09-15, and
+    # careers_common.FINGERPRINTS["workday"] has used [\w-] the whole time --
+    # the two regexes are meant to describe the same host and had silently
+    # diverged.  This file is the SOLE producer of tenants/workday.csv, so the
+    # stricter one won: 11 underscore tenants / 351 rows in the master, 10 of
+    # them absent from tenants/workday.csv and therefore never fetched --
+    # vhr_otsuka (96 rows), vhr_ringcontainer (51), cspire_telapex (36),
+    # sallie_mae, osv_chegg, osv_edf.  The vhr_/osv_ prefixes are Workday's
+    # own multi-tenant convention, so this is a whole shape, not a few typos.
+    # slug_common.SLUG_OK already allows "_", so nothing downstream rejects it.
     "workday": re.compile(
-        r"https?://(?P<tenant>[a-z0-9-]+)\.(?P<pod>wd\d+)\.myworkdayjobs\.com/"
+        r"https?://(?P<tenant>[a-z0-9_-]+)\.(?P<pod>wd\d+)\.myworkdayjobs\.com/"
         r"(?:[a-z]{2}-[A-Z]{2}/)?(?P<site>[^/?#]+)", re.I),
     # Workday's second host, and the reason it was invisible: here the pod is
     # the leftmost LABEL and the tenant is a PATH segment, so the pattern
     # above -- which reads the leftmost label as the tenant -- matched nothing
     # at all and 3,756 rows across 34 tenants never entered any census.
+    # ...and the same host takes an optional locale segment before
+    # /recruiting/, exactly as the myworkdayjobs pattern above already allows.
+    # Without it every /en-US/recruiting/<tenant>/ row was skipped.
     "workday_site": re.compile(
-        r"https?://(?P<pod>(?:impl-)?wd\d+)\.myworkdaysite\.com/recruiting/"
-        r"(?P<tenant>[a-z0-9-]+)/(?P<site>[^/?#]+)", re.I),
+        r"https?://(?P<pod>(?:impl-)?wd\d+)\.myworkdaysite\.com/"
+        r"(?:[a-z]{2}-[A-Z]{2}/)?recruiting/"
+        r"(?P<tenant>[a-z0-9_-]+)/(?P<site>[^/?#]+)", re.I),
     "icims": re.compile(r"https?://([a-z0-9-]+)\.icims\.com", re.I),
     # ADP carries the tenant in a cid= query param, not the host.
     "adp": re.compile(r"workforcenow\.adp\.com/.*?[?&]cid=([0-9a-f-]{8,})", re.I),

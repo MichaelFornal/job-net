@@ -36,9 +36,9 @@ from triage import lanes as L
 # and a started-but-unsent application has not got one yet.
 STATUSES = ("to_apply", "applying", "applied", "skipped", "dead")
 
-# What came BACK, which is a different axis from STATUSES: `status` is what our side did,
+# What came BACK, which is a different axis from STATUSES: `status` is what he did,
 # `outcome` is what the employer did, and an application stays 'applied' forever while
-# its outcome moves. Ordered weakest to strongest — a mail-sync integration relies on it to
+# its outcome moves. Ordered weakest to strongest — inbox_read.py relies on the order to
 # avoid downgrading an interview to a later form rejection.
 OUTCOMES = ("", "acknowledged", "rejected", "interview", "offer", "ghost")
 
@@ -66,7 +66,7 @@ FACETS = {
 APPROVED = "j.live = 1 AND d.verdict = 'approve' AND d.reason = 'manual'"
 
 COLS = """
-    j.job_key, j.company, j.company_norm, j.title, j.location, j.work_mode,
+    j.job_key, j.ref, j.company, j.company_norm, j.title, j.location, j.work_mode,
     j.posted, j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
     j.ai_band, j.startup_tier, j.skills, j.source, j.is_agg,
     j.date_basis, j.date_weak, j.bucket,

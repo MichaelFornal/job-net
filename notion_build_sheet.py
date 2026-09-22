@@ -110,8 +110,8 @@ def geo(loc):
     """(city, state, country) — only when unambiguous.
 
     A blank is safe; a wrong state is not.  ma_remote_build.geo_of routes the
-    MA lane off `state`, so guessing here would put jobs in a lane that is
-    actually applied from."""
+    MA lane off `state`, so guessing here would put jobs in a lane the user
+    actually applies from."""
     city = state = country = ""
     t = (loc or "").strip()
     if not t or REMOTE_RE.search(t):

@@ -31,6 +31,7 @@ import json
 import os
 import random
 import re
+import threading
 import time
 
 import requests
@@ -114,7 +115,22 @@ APEXES = [
     # Page-0 yield by budget: 12 -> 28 slugs, 40 -> 134, 70 -> 146, 100 -> 146.
     Apex("rippling-ats", "rippling", "ats.rippling.com/*",
          "com,rippling,ats)/", "path", anchor="jobs", budget=70),   # 8
-    Apex("rippling-tenant", "rippling", "*.rippling-ats.com/*",
+    # Rippling's public JSON host, the same way greenhouse_discover_boards.py
+    # sweeps boards-api.greenhouse.io and lever_discover_boards.py sweeps
+    # api.lever.co.  Tiny (1 page, ~20 rows) but it is the endpoint the
+    # fetcher actually calls, so anything archived here is a real board.
+    Apex("rippling-api", "rippling",
+         "api.rippling.com/platform/api/ats/v1/board/*",
+         "com,rippling,api)/platform/api/ats/v1/board/", "path",
+         anchor="jobs", budget=36),                                 # 1
+    # family is "rippling-tenant", NOT "rippling", MEASURED 2026-08-24: these
+    # host labels are a DIFFERENT key space.  Probed against
+    # api.rippling.com/board/{slug} they 404, so 569 of 587 were recorded
+    # "dead" -- including 9 hosts the master sees real jobs on.  Of the 75 in
+    # slug_wayback_urls.txt, 48 now 302 to app.rippling.com/apps_sso_direct
+    # (retired) and 27 still serve boards, on applicant-tracking.com
+    # infrastructure with no JSON API.  rippling_tenant_fetch.py owns them.
+    Apex("rippling-tenant", "rippling-tenant", "*.rippling-ats.com/*",
          "com,rippling-ats,", "host"),                              # 5
     Apex("breezy", "breezy", "*.breezy.hr/*",
          "hr,breezy,", "host", budget=36),                          # 178
@@ -309,7 +325,84 @@ def validate(body, expect, apex=None):
     return True, ""
 
 
+# ---------------------------------------------------------------- breaker
+# THE PROBLEM THIS SOLVES.  cdx_get's retry ladder is min(15*2**n, 240) over
+# TRIES=6, so ONE permanently-failing request costs 705-735s -- and the sixth
+# sleep is paid AFTER the last attempt, purely wasted.  Nothing shared any
+# state between calls, so during the 2026-09-02 outage every request paid that
+# ladder independently:
+#
+#   * uncached numpages -> ~12 min, then the exception escapes and the caller's
+#     fallback runs.  Survivable.
+#   * CACHED numpages -> straight to 3,505 page jobs at WORKERS=6, each failure
+#     swallowed per page -> ~117 HOURS.  metric_a adds 84 serial requests
+#     (~17 h) on top.
+#
+# The ceiling in run_all cannot fix this: on 2026-09-02 a 600s ceiling was set,
+# which is BELOW the 705s floor of a single failing request, so the sweep was
+# killed inside its FIRST numpages and produced nothing at all -- no greps, no
+# candidate CSVs, no report.  A ceiling bounds the damage; it cannot buy the
+# offline half.  Only giving up fast can.
+#
+# So: once the archive has refused CONSECUTIVE_LIMIT requests in a row, every
+# later call raises IMMEDIATELY without sleeping.  Callers that already handle
+# a RuntimeError (slug_discover_boards.main, and the per-page swallows) then
+# reach their fallback in seconds instead of never.  Any success resets it --
+# a flaky minute must not disable the channel for the rest of the run.
+CDX_BREAKER_LIMIT = int(os.environ.get("CDX_BREAKER_LIMIT") or 3)
+_breaker_lock = threading.Lock()
+_breaker = {"consecutive": 0, "reason": ""}
+
+
+def cdx_breaker_state():
+    """(tripped, consecutive_failures, last_reason) — for reporting."""
+    with _breaker_lock:
+        return (_breaker["consecutive"] >= CDX_BREAKER_LIMIT,
+                _breaker["consecutive"], _breaker["reason"])
+
+
+def cdx_breaker_reset():
+    with _breaker_lock:
+        _breaker["consecutive"] = 0
+        _breaker["reason"] = ""
+
+
+def cdx_breaker_check():
+    """Raise CDXUnavailable if the breaker is already open.
+
+    Exported so the three *_discover_boards.py transports — which keep their
+    own cdx_get because they validate `r.text` rather than a capped stream —
+    can share ONE breaker with this module instead of each carrying a private
+    failure counter that learns nothing from the others.
+    """
+    with _breaker_lock:
+        if _breaker["consecutive"] >= CDX_BREAKER_LIMIT:
+            raise CDXUnavailable(
+                "CDX breaker open after %d consecutive failures (%s) — "
+                "not retrying" % (_breaker["consecutive"], _breaker["reason"]))
+
+
+def cdx_breaker_record(reason):
+    """Record one exhausted request; announce the trip on the way past."""
+    with _breaker_lock:
+        _breaker["consecutive"] += 1
+        _breaker["reason"] = reason or "unknown"
+        n = _breaker["consecutive"]
+    if n == CDX_BREAKER_LIMIT:
+        print("  CDX BREAKER OPEN after %d consecutive failures (%s) — "
+              "further requests fail fast this run" % (n, reason), flush=True)
+
+
+class CDXUnavailable(RuntimeError):
+    """The archive is refusing everything; stop asking.
+
+    A subclass of RuntimeError on purpose -- every existing `except
+    RuntimeError` and `except Exception` call site keeps working unchanged.
+    """
+
+
 def cdx_get(s, params, expect="rows", apex=None):
+    cdx_breaker_check()
     last = None
     for attempt in range(TRIES):
         try:
@@ -318,25 +411,38 @@ def cdx_get(s, params, expect="rows", apex=None):
                 body = _read_capped(r)
                 ok, why = validate(body, expect, apex)
                 if ok:
+                    cdx_breaker_reset()
                     return body
                 last = "bad-body: " + why
             else:
                 last = "HTTP %d" % r.status_code
         except (requests.RequestException, RuntimeError) as e:
             last = type(e).__name__ + ": " + str(e)[:60]
-        time.sleep(min(15 * (2 ** attempt), 240) + random.uniform(0, 5))
+        # Do not sleep after the final attempt -- it is 240s of pure waste on
+        # the way to raising anyway.
+        if attempt < TRIES - 1:
+            time.sleep(min(15 * (2 ** attempt), 240) + random.uniform(0, 5))
+    cdx_breaker_record(last)
     raise RuntimeError("CDX failed after %d tries: %s" % (TRIES, last))
 
 
-def numpages(s, apex):
-    body = cdx_get(s, {"url": apex.pattern, "showNumPages": "true"},
-                   expect="int")
+def numpages(s, apex, since=None):
+    """Page count for this apex.  `since` (YYYYMMDD) restricts the count to
+    captures on or after that day -- the window that keeps a finished crawl
+    from freezing forever.  See cdx_common."""
+    q = {"url": apex.pattern, "showNumPages": "true"}
+    if since:
+        q["from"] = since
+    body = cdx_get(s, q, expect="int")
     return int(body.strip() or 0)
 
 
-def page_params(apex, page, collapse=None):
-    return {"url": apex.pattern, "fl": apex.fl,
-            "collapse": collapse or apex.collapse, "page": str(page)}
+def page_params(apex, page, collapse=None, since=None):
+    q = {"url": apex.pattern, "fl": apex.fl,
+         "collapse": collapse or apex.collapse, "page": str(page)}
+    if since:
+        q["from"] = since
+    return q
 
 
 def expect_for(apex):
@@ -357,6 +463,9 @@ def load_state(path):
     st.setdefault("numpages", {})
     st.setdefault("empty_pages", [])
     st.setdefault("collapse_probe", {})
+    # last_crawl / last_crawl_inferred are cdx_common's; seed them here so a
+    # caller that never imports cdx_common still round-trips them intact.
+    st.setdefault("last_crawl", {})
     return st
 
 

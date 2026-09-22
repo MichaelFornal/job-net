@@ -231,12 +231,29 @@ def main():
         return 1
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    # PRESERVE HOSTS THIS SCRIPT DID NOT MINE.  Corpus mining is only one
+    # CHANNEL into this candidate list -- careers_resolve.py hands over hosts
+    # it fingerprinted as Radancy from the Common Crawl sweep, which by
+    # definition are NOT in the master yet and so can never be re-mined here.
+    # Rewriting the file from `mined` alone silently deleted them, the same
+    # failure ats_mine_tenants.py hit on 2026-08-20 (3,293 Workday boards).
+    handed = {}
+    if os.path.exists(CAND):
+        with open(CAND, newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                h = (r.get("host") or "").strip().lower()
+                if h and h not in mined and (r.get("src") or "") == "careers":
+                    handed[h] = r
     with open(CAND, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["host", "n_rows", "prefix_hint", "example_url"])
+        w.writerow(["host", "n_rows", "prefix_hint", "example_url", "src"])
         for h, r in sorted(mined.items(), key=lambda kv: -kv[1]["n"]):
-            w.writerow([h, r["n"], r["prefix"], r["example"]])
-    print("wrote %s" % CAND, flush=True)
+            w.writerow([h, r["n"], r["prefix"], r["example"], "corpus"])
+        for h, r in sorted(handed.items()):
+            w.writerow([h, r.get("n_rows") or 0, r.get("prefix_hint") or "",
+                        r.get("example_url") or "", "careers"])
+    print("wrote %s (%d mined + %d handed over)"
+          % (CAND, len(mined), len(handed)), flush=True)
 
     # Company names already in tenants/radancy.csv WIN over a freshly parsed
     # RSS title.  The parser gets ~80% of them right and the rest were fixed by

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """swath_vocab.py — the eleven job swaths, as patterns that actually match postings.
 
-One definition, imported by everything. `vocab.py` states the rule this follows:
+One definition, imported by everything. `picks_build.py` states the rule this follows:
 "Imported, never copied: a second transcription of the AI vocabulary is a second thing to
 keep in sync, and these two have already drifted once." The Phase 1 measurement, the
 Phase 3 lane builder, and the selftest all read this module.
 
-profile.json's `preferences.target_titles_<swath>` carries the human-readable list — the
-targets as a person writes them. This file carries the regex that finds it. Both exist for
-the reason vocab.py gives: the profile says "Tokenization / RWA Consultant"
+profile.json's `preferences.target_titles_<swath>` carries the human-readable list — what
+he is targeting, in his words. This file carries the regex that finds it. Both exist for
+the reason picks_build.py:67-70 gives: the profile says "Tokenization / RWA Consultant"
 and no posting is ever titled that.
 
 Two defects are carried forward from `picks` as design rules, not as bugs to rediscover:
@@ -19,7 +19,7 @@ Two defects are carried forward from `picks` as design rules, not as bugs to red
      anchored to a ROLE word. The desk noun earns its points in domain scoring instead.
   2. **Blocklists match titles, not the employer's product.** `skills` describes what the
      company sells, so killing on it drops a full-stack engineer at a biotech and a
-     business-development lead at a robotics company. `vocab.killed_by` judges the
+     business-development lead at a robotics company. `picks_build.killed_by` judges the
      two separately and exempts commercial titles; this module reuses that function
      rather than restating the rule.
 """
@@ -29,7 +29,7 @@ import re
 # key -> (code, label, resume file stem, title pattern)
 #
 # Patterns are deliberately narrow at the role word and wide at the qualifier. Widening
-# the role word is how a lane fills with off-target jobs; widening the qualifier only
+# the role word is how a lane fills with jobs he cannot do; widening the qualifier only
 # costs precision inside a pool that is already the right shape.
 
 _F1 = re.compile(r"""(?ix)
@@ -209,8 +209,8 @@ SWATHS = {
                   "F11-trust-safety-risk-ops", _F11),
 }
 
-# Researched, measured, and deliberately NOT built — this swath was declined. Kept here so
-# the research doc can price the door that closed, and so nothing silently reopens it.
+# Researched, measured, and deliberately NOT built — the user declined it. Kept here so
+# the research doc can price the door he closed, and so nothing silently reopens it.
 DECLINED = {
     "support": ("Support Engineering / TAM / Customer Engineering",
                 re.compile(r"""(?ix)
@@ -226,7 +226,7 @@ DECLINED = {
 # Matched against `skills` + `company_industry`, NEVER against the title. This is the
 # other half of the rule at the top of this file: a desk noun describes the employer's
 # product, so it earns domain points on a row that ALREADY looks like the right job, and
-# it never buys a row its way in on its own. `vocab.title_fit` enforces the same
+# it never buys a row its way in on its own. `picks_build.title_fit` enforces the same
 # separation for the AI/finance lane.
 _DOM = {
     "gtm": r"salesforce|hubspot|marketo|outreach\.io|salesloft|clay\b|apollo\.io|"

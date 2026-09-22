@@ -691,7 +691,19 @@ def do_berlinstartup(s, out):
 
 SOURCES = {
     "powertofly": do_powertofly,
-    "wttj": do_wttj,
+    # wttj is UNREGISTERED as of 2026-09-02, not deleted.  wttj_fetch.py walks
+    # the same Algolia index whole (all 88,431 postings, 100.00% coverage
+    # verified against nbHits) plus the second index this file never knew
+    # about -- wk_cms_organizations_production, 17,204 companies -- keeps all
+    # 42 record fields instead of 15, and runs the walk 12-wide in ~15s.  It
+    # is also default-ON in run_all, where this copy sat in DEFAULT_OFF `intl`
+    # and refreshed only when somebody ran `--only intl`.
+    #
+    # do_wttj and its constants are left in place below because they document
+    # the index, the 1000-record paginator trap and the referer requirement in
+    # this file's own voice.  NOTE that unregistering it means INTLMISC_ONLY=
+    # wttj now exits "unknown source 'wttj'" -- main() validates against this
+    # dict.  Re-add the line above to bring it back; nothing else changed.
     "wanted": do_wanted,
     "wantedly": do_wantedly,
     "berlinstartup": do_berlinstartup,

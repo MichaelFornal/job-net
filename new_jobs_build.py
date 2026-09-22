@@ -37,8 +37,11 @@ Startup AI / Summary) and New_Jobs_<date>.csv.
 """
 
 import csv
+import datetime as dt
+import glob
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -48,8 +51,8 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.utils import get_column_letter
 
 import all_jobs_build as ajb
-# The US test.  Deliberately NOT the US_HINT regex that ai_ma_remote.py and
-# startup_build.py both carry: that one puts [A-Z]{2} inside a (?i) group,
+# The US test.  Deliberately NOT the US_HINT regex that ai_ma_remote.py:49 and
+# startup_build.py:272 both carry: that one puts [A-Z]{2} inside a (?i) group,
 # so ", on" (Ontario), ", bc" and ", nsw" all read as US.  us_basis is
 # case-sensitive on abbreviations, checks membership in the real state set, and
 # returns WHY a row qualified so the sheet can show its own evidence.
@@ -80,11 +83,48 @@ def _argval(flag, default):
 # URL) carry newlines straight out of the source title — Freelancer.com,
 # Arbeitsagentur and RemoteOK all publish multi-line titles.  Those keys split
 # across lines, never matched, and reported themselves as new every run.
-BASELINE = _argval("--baseline", os.path.join(
-    BASE, "baseline_job_keys_2026-07-30.jsonl"))
+def _newest_baseline():
+    """Newest baseline_job_keys_*.jsonl on disk, or '' if there is none.
+
+    This used to be the literal `baseline_job_keys_2026-07-30.jsonl`, which
+    has not existed since the snapshots rotated -- so the DEFAULT invocation of
+    this script died at the `baseline key snapshot missing` exit below, while
+    extract_baseline_keys.py went on writing `baseline_job_keys_<today>.jsonl`
+    every run.  Nothing reconciled the two names, so the new-jobs diff was
+    simply unavailable unless you passed --baseline by hand and happened to
+    know it.  Name sort is safe here: the date IS the filename.
+
+    The date pairs with SINCE below, which is read off the chosen file rather
+    than frozen, for the same reason.
+    """
+    hits = sorted(glob.glob(os.path.join(BASE, "baseline_job_keys_*.jsonl")))
+    return hits[-1] if hits else ""
+
+
+BASELINE = _argval("--baseline", _newest_baseline())
+
 # Previous snapshot's build date: the boundary between "posted since last run"
-# and "we simply had not seen it".
-SINCE = _argval("--since", "2026-07-29")
+# and "we simply had not seen it".  Derived from BASELINE's own filename so the
+# two can never disagree; a stale literal here silently re-reports weeks of
+# postings as new.
+def _baseline_date(path, fallback="2026-07-29"):
+    """SINCE for a given baseline file: the day BEFORE the snapshot's name.
+
+    The minus-one-day is the original convention, not a fudge --
+    baseline_job_keys_2026-07-30.jsonl shipped with SINCE = 2026-07-29.  A
+    snapshot named for date D is taken at the START of D's run (this one:
+    written 22:10 the evening before, against a master rebuilt at 03:14), so a
+    posting dated D-1 is still genuinely new relative to it.  Deriving SINCE = D
+    would silently discard a full day of new postings at the boundary.
+    """
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(path or ""))
+    if not m:
+        return fallback
+    d = dt.date.fromisoformat(m.group(1)) - dt.timedelta(days=1)
+    return d.isoformat()
+
+
+SINCE = _argval("--since", _baseline_date(BASELINE))
 
 # The sources re-fetched this run.  Only these can carry genuinely new
 # postings; every other source kept the JSONL it already had on disk.
@@ -96,16 +136,39 @@ SINCE = _argval("--since", "2026-07-29")
 # instead of its sources counted 40,507 legitimately-new rows as re-keying
 # artifacts on 2026-08-03 — a 17x overstatement.
 #
-# Derived from the distinct `source` values in the JSONLs this run rotated:
-#   contract_norm/{boards_all,phenom_all,bullhorn_all,ats_all_*}.jsonl
-#   plus the eight family masters.
-# Re-derive it when the refresh scope changes; pass --refreshed a,b,c to override.
+# Derived 2026-08-28 from the sources every fetch step in run_all's daily
+# plan actually produced (the `done` lines in logs/chain_run_all.out, cross-
+# checked against triage.db first_seen by source).  The previous literal was
+# the 26-source list of early August; it predated workday, careerjet, themuse,
+# oracle, icims, usajobs and the ATS tail, so on 2026-08-28 it reported
+# 129,855 of 234,471 new rows as "not re-fetched" when the true figure was 0.
+# Re-derive it when the refresh scope changes; pass --refreshed a,b,c to
+# override.  This list only feeds the off-source COUNT and the workbook's
+# "Sources re-fetched this run" line — it never filters rows.
 REFRESHED = {s.strip() for s in _argval(
     "--refreshed",
-    "arbeitnow,ashby,bamboohr,braintrust,breezy,bullhorn,dover,freelancer,"
-    "getro,greenhouse,himalayas,jazzhr,jobicy,lever,personio,phenom,recruitee,"
-    "remoteok,remotive,rippling,smartrecruiters,teamtailor,weworkremotely,"
-    "workable,workingnomads,yc"
+    "adp,arbeitnow,ashby,bamboohr,braintrust,breezy,bullhorn,careerjet,comeet,"
+    "cornerstone,cryptocurrencyjobs,dayforce,dover,dribbble,eightfold,"
+    "freelancer,gem,getro,greenhouse,himalayas,icims,jazzhr,jobgether,jobicy,"
+    "jobvite,join,keka,lever,manatal,mindtheproduct,neogov,notion,oracle,"
+    "paycom,personio,phenom,pinpoint,powertofly,radancy,recruitee,remoteio,"
+    "remoteleaf,remoteok,remotive,rippling,smartrecruiters,taleo,teamtailor,"
+    "thehub,themuse,torre,ukg,usajobs,vuejobs,web3career,weworkremotely,"
+    "workable,workday,workingnomads,wttj,yc,zohorecruit,"
+    # THE PER-BOARD NAMES OF TWO MULTI-BOARD FETCHERS, added 2026-09-09.
+    # This list holds SOURCE names, not FAMILY names, and a fetcher that
+    # scrapes several boards writes one `source` per board -- so naming the
+    # fetcher credits nothing.  Both of these ran on the 2026-09-08 chain and
+    # every row they contributed was reported as "credit a source that was not
+    # re-fetched": 341 of them (dynamitejobs 321 / justremote 19 / larajobs 1),
+    # the same three that read 254 on 09-01 and were misread then as a
+    # boards_fetch gap.  Derived by enumerating the `source` field of the two
+    # JSONLs themselves rather than from `done` lines, so the four quiet
+    # members (jobspresso, authenticjobs, pythonorg, elixirjobs) are covered
+    # before they ever produce a new row -- which is how the previous
+    # derivation decayed.
+    "jobspresso,dynamitejobs,justremote,"            # smallremote_fetch.py
+    "authenticjobs,pythonorg,larajobs,elixirjobs"    # nicheboards fetcher
 ).split(",") if s.strip()}
 
 COLUMNS = ["new_type"] + ajb.COLUMNS
@@ -175,7 +238,7 @@ def ai_of(row):
 
 
 def startup_tier_of(row, verdicts, co_all):
-    """(tier, evidence) or None — startup_build.py, adapted to a
+    """(tier, evidence) or None — startup_build.py:483-559, adapted to a
     positional row.  Every gate here is load-bearing; see startup_build for the
     measurements behind them.
     """

@@ -9,7 +9,7 @@
 #
 # Pass --refresh to rotate the JSONL + state first (a true re-fetch rather
 # than a resume). Progress: ash_pipeline.status + per-stage ash_<stage>.out.
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 
 run_stage() { # <script.py> <tag> <max_attempts>
   local SCRIPT=$1 TAG=$2 MAX=$3 i=0 rc=1

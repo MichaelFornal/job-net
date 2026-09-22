@@ -7,7 +7,7 @@
 # Sequential on purpose: run_all's tail reaches all_jobs_build while the Ashby
 # build would still be writing its master CSV, and a half-written CSV merges
 # silently. Sequencing costs ~15 min and removes the race.
-cd "$(cd "$(dirname "$0")" && pwd)" || exit 1
+cd /Users/michaelfornal/Documents/jb || exit 1
 
 echo "=== ashby refresh $(date -u '+%F %T') ==="
 ./ash_run_all.sh --refresh

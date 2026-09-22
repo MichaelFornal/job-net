@@ -18,7 +18,7 @@ fabricated.  triage_load.py reads it; nothing else changes.
 WHY JOIN THROUGH THE JSONL AND NOT THE apply_url
   The ledger key is the fetcher's own (board, job_id), and every one of the
   eight builds its apply_url differently — atstail alone has six shapes
-  (atstail_fetch.py,538,619,859,1075,1146).  Reversing a URL back to a job
+  (atstail_fetch.py:448,538,619,859,1075,1146).  Reversing a URL back to a job
   id would be eight guesses that break silently the next time a URL template
   changes.  contract_norm/*.jsonl still carries `job_id` and `board` verbatim,
   so this joins on the fetcher's own key and measures the hit rate.
@@ -35,6 +35,7 @@ TWO LEDGER SEMANTICS, DO NOT MIX THEM UP
                    had real dates.  Reading this ledger the workday way would
                    mark every one of those 29,816 fabricated.
 """
+import csv
 import json
 import os
 import sys
@@ -67,9 +68,17 @@ LEDGERS = [
      "precision"),
 ]
 
+# Sources that state their precision as a COLUMN in their own master CSV
+# rather than only inside a ledger, so they need no (ledger, jsonl) pair.
+# rippling is the first: its detail endpoint publishes a real createdOn for
+# most postings (posted_precision=employer) and falls back to the ledger's
+# crawl date for the rest -- the *.rippling-ats.com tenant boards, which
+# publish no date anywhere, plus any posting whose detail fetch failed.
+MASTER_PRECISION = [("rippling_jobs_master.csv", "rippling")]
+
 # A date that is not the employer's.  "30plus" is workday's "Posted 30+ Days
 # Ago" -> today-30: the NEWEST date consistent with what the board said, not a
-# measurement.  workday_fetch.py calls it "an unbounded floor" and it is
+# measurement.  workday_fetch.py:364 calls it "an unbounded floor" and it is
 # 244,269 of 718,483 ledger entries, so it cannot be waved through as real.
 FABRICATED_PRECISION = {"first_seen", "30plus", "unknown", ""}
 
@@ -134,6 +143,33 @@ def build(verbose=True):
             print(f"  {jsonl_name:16s} rows={hit + miss + noid:>8,}  "
                   f"hit={hit:>8,}  miss={miss:>8,}  no_id={noid:>6,}  "
                   f"fabricated={fab:>8,}")
+
+    # Master CSVs that carry posted_precision directly.
+    for csv_name, src in MASTER_PRECISION:
+        path = os.path.join(BASE, csv_name)
+        if not os.path.exists(path):
+            stats[csv_name] = {"skipped": "master csv missing"}
+            if verbose:
+                print(f"  {csv_name:16s} SKIPPED (missing)")
+            continue
+        rows = fab = noprec = 0
+        with open(path, newline="") as f:
+            rd = csv.DictReader(f)
+            for r in rd:
+                rows += 1
+                prec = (r.get("posted_precision") or "").strip()
+                if not prec:
+                    noprec += 1
+                if prec in FABRICATED_PRECISION:
+                    url = (r.get("apply_url") or "").strip()
+                    if url:
+                        fabricated.add(url)
+                        fab += 1
+        stats[csv_name] = {"rows": rows, "fabricated": fab,
+                           "blank_precision": noprec, "source": src}
+        if verbose:
+            print(f"  {csv_name:16s} rows={rows:>8,}  "
+                  f"fabricated={fab:>8,}  blank_prec={noprec:>7,}")
     return fabricated, stats
 
 

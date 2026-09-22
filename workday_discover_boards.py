@@ -59,6 +59,12 @@ import workday_fetch as wf
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 RAW_TXT = os.path.join(BASE, "slug_wayback_urls.txt")
+# The Common Crawl channel (workday_cc_discover.py, 2026-09-02) writes the
+# SAME "tag\turl" format into its own dump rather than appending here, so
+# that the Wayback dump's row count stays usable as a freeze diagnostic.
+# Both are parsed identically; provenance is the filename.
+CC_TXT = os.path.join(BASE, "workday_cc_urls.txt")
+RAW_SOURCES = (RAW_TXT, CC_TXT)
 CAND_CSV = os.path.join(BASE, "workday_candidates.csv")
 TENANTS_CSV = wf.TENANTS_CSV
 TAGS = {"workday-jobs": wf.JOBS_DOMAIN, "workday-site": wf.SITE_DOMAIN}
@@ -85,52 +91,70 @@ SANDBOX_TENANT = re.compile(
     r"training|demo|dr|poc)\d*$", re.I)
 
 
-def parse_raw():
-    """(tenant, pod, site, domain) -> times seen, from the cached CDX rows."""
+def parse_raw(sources=None):
+    """(tenant, pod, site, domain) -> times seen, from the cached raw rows.
+
+    `sources` defaults to RAW_SOURCES — the Wayback dump plus the Common
+    Crawl dump — and every one that exists is read, so a family keeps being
+    discovered when either channel is down.  Passing an explicit list reads
+    exactly those and never raises; only the DEFAULT path errors when no
+    dump is present at all, because that is the operator-facing case that
+    needs a next step.
+    """
     found = defaultdict(int)
     skipped = defaultdict(int)
-    if not os.path.exists(RAW_TXT):
+    default = sources is None
+    paths = list(RAW_SOURCES if default else sources)
+    present = [p for p in paths if os.path.exists(p)]
+    if default and not present:
         raise SystemExit(
-            f"missing {os.path.basename(RAW_TXT)} — run "
+            f"no raw dump present (looked for "
+            f"{', '.join(os.path.basename(p) for p in paths)}) — run "
             f"`python3 slug_discover_boards.py --apex workday-jobs,workday-site`"
-            f" first")
-    with open(RAW_TXT, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            tag, _, url = line.partition("\t")
-            dom = TAGS.get(tag)
-            if dom is None:
-                continue
-            url = url.strip()
-            m = (JOBS_RE if dom == wf.JOBS_DOMAIN else SITE_RE).match(url)
-            if not m:
-                skipped["unparsed"] += 1
-                continue
-            tenant = m.group("tenant").lower()
-            pod = m.group("pod").lower()
-            if not PROD_POD.match(pod):
-                skipped["sandbox-pod"] += 1
-                continue
-            if SANDBOX_TENANT.search(tenant):
-                skipped["sandbox-tenant"] += 1
-                continue
-            path = urlparse("https://x/" + m.group("rest")).path
-            if ASSET.search(path):
-                skipped["asset"] += 1
-                continue
-            segs = [x for x in path.split("/") if x]
-            # A locale prefix shifts the site by one; strip it rather than
-            # indexing blind, the same reason rippling's apex uses an anchor.
-            if segs and LOCALE.match(segs[0]):
-                segs = segs[1:]
-            if not segs:
-                skipped["no-site"] += 1
-                continue
-            site = segs[0]
-            if site.lower() in NOT_A_SITE or len(site) > 64:
-                skipped["not-a-site"] += 1
-                continue
-            found[(tenant, pod, site, dom)] += 1
+            f" or `python3 workday_cc_discover.py` first")
+    for path in present:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            _scan(f, found, skipped)
     return found, skipped
+
+
+def _scan(f, found, skipped):
+    """Accumulate one raw dump into `found` / `skipped`."""
+    for line in f:
+        tag, _, url = line.partition("\t")
+        dom = TAGS.get(tag)
+        if dom is None:
+            continue
+        url = url.strip()
+        m = (JOBS_RE if dom == wf.JOBS_DOMAIN else SITE_RE).match(url)
+        if not m:
+            skipped["unparsed"] += 1
+            continue
+        tenant = m.group("tenant").lower()
+        pod = m.group("pod").lower()
+        if not PROD_POD.match(pod):
+            skipped["sandbox-pod"] += 1
+            continue
+        if SANDBOX_TENANT.search(tenant):
+            skipped["sandbox-tenant"] += 1
+            continue
+        path = urlparse("https://x/" + m.group("rest")).path
+        if ASSET.search(path):
+            skipped["asset"] += 1
+            continue
+        segs = [x for x in path.split("/") if x]
+        # A locale prefix shifts the site by one; strip it rather than
+        # indexing blind, the same reason rippling's apex uses an anchor.
+        if segs and LOCALE.match(segs[0]):
+            segs = segs[1:]
+        if not segs:
+            skipped["no-site"] += 1
+            continue
+        site = segs[0]
+        if site.lower() in NOT_A_SITE or len(site) > 64:
+            skipped["not-a-site"] += 1
+            continue
+        found[(tenant, pod, site, dom)] += 1
 
 
 def load_known():

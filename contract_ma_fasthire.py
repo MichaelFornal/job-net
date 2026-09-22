@@ -3,7 +3,7 @@
 contract_ma_fasthire.py — from contract_master.csv, build a ranked workbook of
 MA-relevant contract gigs that are structurally likely to hire FAST.
 
-Scope (as configured):
+Scope (decided with the user):
   geo    MA-located OR US-remote OR commutable nearby (RI / southern NH /
          northern CT).  Non-US and EU (m/w/d ...) roles dropped.
   field  professional / office / tech only — clinical per-diem (PT/RN/NP/PA...)

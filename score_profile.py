@@ -21,8 +21,8 @@ path is the readable reference.  `--verify` asserts they agree exactly on real
 rows; if they ever diverge, the SQL one is right by definition.
 
 GATES ARE NOT WEIGHTS.  A gate is a filter with no points attached.  The current
-builders give four different answers to that question -- geo_lane scores a
-killed title DOWN (keeps proximity, caps at 12), another is a strict
+builders give four different answers to that question -- local_build scores a
+killed title DOWN (keeps proximity, caps at 12), ff_build is a strict
 conjunction, picks requires a title hit, sfl admits killed rows at 0.  Here:
 US basis, kill filter and the rung ceiling are gates, applied once in
 corpus_build.py; everything else is a signed weight you can slide to zero.
@@ -42,8 +42,8 @@ PROFILES = os.path.join(HERE, "score_profiles.json")
 GATE_DEFAULTS = {
     "us_only": True,          # remote_us_classify.us_basis, not the country column
     "allow_worldwide": True,  # 'anywhere/worldwide' listings are US-eligible
-    "exclude_killed": True,   # vocab.killed_by + geo_lane.LOCAL_OFF
-    "rung_max": 4,            # level.rung_src: drop Director/VP/C-level
+    "exclude_killed": True,   # picks_build.killed_by + local_build.LOCAL_OFF
+    "rung_max": 4,            # level_build.rung_src: drop Director/VP/C-level
 }
 
 
@@ -169,7 +169,7 @@ def contributions(feats, p, qval=0.0):
 
     `why` is DERIVED here rather than stored, which is why it can update as a
     slider moves.  The repo's existing invariant is "every point traceable to a
-    phrase in why" (vocab.py); computing the string from the same
+    phrase in why" (picks_build.py:338); computing the string from the same
     numbers the sort uses makes that true by construction instead of by
     discipline.  The bonus cap is attributed proportionally so the parts still
     sum to the whole -- selftest asserts that.
