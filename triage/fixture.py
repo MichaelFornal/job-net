@@ -99,7 +99,11 @@ def _company(i):
 def rows(n=4000, seed=7):
     """n synthetic rows, every facet populated on both sides."""
     random.seed(seed)
-    today = dt.date(2026, 8, 24)
+    # Relative to the real date, because the lanes are: `ai12` keeps the last
+    # RECENT_DAYS of postings counted from today.  A pinned date here aged the
+    # whole fixture out of that window 42 days after it was written, and the
+    # suite and `make demo` both went empty with nothing changed.
+    today = dt.date.today()
     out = []
     for i in range(n):
         # DRAWN, not cycled.  An earlier version assigned facets on i % 3,
