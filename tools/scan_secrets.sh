@@ -107,6 +107,14 @@ else
   echo "  no files yet"
 fi
 
+# EXCL hides the identity list from the content scan (it would match itself),
+# so being tracked needs a check of its own.  It names real people and places;
+# it reached a public push once, when a refresh copied a .gitignore without it.
+if [ -d .git ] && git ls-files --error-unmatch "$LOCAL" >/dev/null 2>&1; then
+  echo "FAIL: $LOCAL is tracked -- git rm --cached it and keep it in .gitignore"
+  rc=1
+fi
+
 # --- 2. history -----------------------------------------------------------
 if [ "$SCAN_HISTORY" = 1 ] && [ -d .git ] && git rev-parse HEAD >/dev/null 2>&1; then
   echo "== scanning git history =="

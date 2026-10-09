@@ -1,11 +1,13 @@
 # job-net
 
+[![ci](https://github.com/MichaelFornal/job-net/actions/workflows/ci.yml/badge.svg)](https://github.com/MichaelFornal/job-net/actions/workflows/ci.yml)
+
 A job-market crawler and triage system. It harvests postings from **43
 applicant-tracking systems**, merges them into one deduplicated corpus, tracks
 how much it should trust each posting's date, and serves the result as a
 keyboard-driven review app.
 
-**~62,000 lines of Python. Four third-party dependencies.** Everything else is
+**~66,000 lines of Python. Four third-party dependencies.** Everything else is
 the standard library: `sqlite3` for storage, `http.server` for the web app,
 `concurrent.futures` for the crawlers.
 
@@ -18,7 +20,7 @@ the `why` line on each card is the same arithmetic, so it moves with them.*
 | | |
 |---|---|
 | Crawlers | 43 fetchers, 21 board-discovery / liveness probes |
-| Corpus | 1,116,038 unique postings after dedupe *(measured 2026-07-27)* |
+| Corpus | 6,940,011 unique postings after dedupe in the private deployment *(counted 2026-10-08)* |
 | Dedupe | 3-tier key; URL canonicalization across 38 ATS host patterns |
 | Triage app | 28 lanes, vanilla JS, no build step, stdlib HTTP server |
 | Scoring | 65 orthogonal features, re-ranked in one matrix multiply |
