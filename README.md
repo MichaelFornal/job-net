@@ -21,6 +21,7 @@ the `why` line on each card is the same arithmetic, so it moves with them.*
 |---|---|
 | Crawlers | 43 fetchers, 21 board-discovery / liveness probes |
 | Corpus | 6,940,011 unique postings after dedupe in the private deployment *(counted 2026-10-08)* |
+| Boards | 139,935 job boards read in the private deployment *(counted 2026-10-08)* |
 | Dedupe | 3-tier key; URL canonicalization across 38 ATS host patterns |
 | Triage app | 28 lanes, vanilla JS, no build step, stdlib HTTP server |
 | Scoring | 65 orthogonal features, re-ranked in one matrix multiply |
